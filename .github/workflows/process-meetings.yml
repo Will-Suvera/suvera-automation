@@ -10,7 +10,9 @@ name: Process Fathom meetings
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Every 5 min during UK working hours (07:00–18:59 UTC, roughly 08:00–19:59 BST) Mon–Fri.
+    # Keeps subscription usage bounded: ~144 runs/day Mon–Fri vs 288/day 24/7.
+    - cron: '*/5 7-18 * * 1-5'
   workflow_dispatch: {}
 
 concurrency:
