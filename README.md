@@ -7,18 +7,29 @@ new Fathom partner meetings land in Notion + Slack within minutes of ending.
 ## What's here
 
 - `.github/workflows/process-meetings.yml` — runs every 5 min (GitHub Actions
-  cron minimum) and POSTs to `POST /v1/code/triggers/{id}/run` on claude.ai.
+  cron minimum) and POSTs to the Claude Code
+  `POST /v1/claude_code/routines/{id}/fire` endpoint on `api.anthropic.com`.
   The actual pipeline (poll Fathom → dedupe → Notion page → Master Synthesis
-  → Slack main + thread → 5 video clips) lives inside the scheduled trigger
-  prompt, not this repo. That keeps the workflow minimal.
+  → Slack main + thread → 5 video clips) lives inside the routine's prompt,
+  not this repo. That keeps the workflow minimal.
+
+  API reference: https://code.claude.com/docs/en/routines#add-an-api-trigger
 
 ## Setup
 
-1. **Secrets** — in GitHub repo settings → Secrets and variables → Actions:
-   - `CLAUDE_API_TOKEN` — a claude.ai API token with permission to call
-     `POST /v1/code/triggers/{id}/run`.
-   - `TRIGGER_ID` — the ID of the scheduled trigger to invoke. Current value:
-     `trig_01XNRjSRFpiybi9bVYXvEYJd` (the `process-meetings-auto` trigger).
+1. **Add an API trigger to the routine**:
+   - Go to https://claude.ai/code/routines
+   - Click the `process-meetings-auto` routine
+   - Click the pencil icon (Edit routine)
+   - Scroll to **Select a trigger** → **Add another trigger** → **API**
+   - Click **Generate token**, copy immediately (shown once only)
+
+2. **Secrets** — in GitHub repo settings → Secrets and variables → Actions:
+   - `CLAUDE_API_TOKEN` — the `sk-ant-oat01-...` token from step 1.
+   - `TRIGGER_ID` — the routine ID. Current value:
+     `trig_01XNRjSRFpiybi9bVYXvEYJd` (the `process-meetings-auto` routine).
+     Routine IDs use the `trig_` prefix — the path parameter in the `/fire`
+     URL is the same ID you see in the CLI / `RemoteTrigger.list`.
 
 2. **Verify** — after pushing, go to the Actions tab → "Process Fathom
    meetings" → **Run workflow** to fire a one-off run. Inspect the logs.
