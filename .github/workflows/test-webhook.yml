@@ -95,20 +95,20 @@ jobs:
           TARGET_RID=999999999
           for i in 1 2 3 4 5 6; do
             sleep 5
-            RUNS=$(gh run list --workflow=process-meeting-webhook.yml --event=repository_dispatch --limit 5 --json databaseId,createdAt,status,conclusion,displayTitle)
+            RUNS=$(gh run list --repo "${{ github.repository }}" --workflow=process-meeting-webhook.yml --event=repository_dispatch --limit 5 --json databaseId,createdAt,status,conclusion,displayTitle)
             MATCH=$(echo "$RUNS" | jq -r --argjson ts "$BEFORE" --argjson rid "$TARGET_RID" '
               [.[] | select((.createdAt | fromdateiso8601) >= $ts) | select(.displayTitle | contains(($rid|tostring)))] | .[0].databaseId // empty')
             if [ -n "$MATCH" ]; then
               echo "::notice::Dispatched run id=$MATCH"
               echo "::group::Run details"
-              gh run view "$MATCH" --json status,conclusion,displayTitle
+              gh run view --repo "${{ github.repository }}" "$MATCH" --json status,conclusion,displayTitle
               echo "::endgroup::"
               exit 0
             fi
             echo "attempt $i: no matching run yet"
           done
           echo "::error::Did not see a dispatched run for recording_id=$TARGET_RID within 30s"
-          gh run list --workflow=process-meeting-webhook.yml --limit 5
+          gh run list --repo "${{ github.repository }}" --workflow=process-meeting-webhook.yml --limit 5
           exit 1
 
       - name: 5. Summary
