@@ -46,11 +46,13 @@ jobs:
             --allowedTools Bash,Read,Write,Edit,Grep,Glob
             --max-turns 50
           prompt: |
-            You are posting today's concise partner-meeting digest to Slack.
-            Be ruthlessly brief — highest-yield items only, no filler.
+            You are posting today's partner-meeting digest to Slack. Scope is
+            narrow: ONLY feature requests + gaps (things partners asked for that
+            Planner doesn't have yet). No problems section. No preamble. No
+            adjectives. Be ruthlessly brief.
 
             ## Credentials
-            - NOTION_TOKEN in $NOTION_TOKEN — use REST API with headers:
+            - NOTION_TOKEN in $NOTION_TOKEN — Notion REST API with headers:
                 Authorization: Bearer $NOTION_TOKEN
                 Notion-Version: 2025-09-03
             - SLACK_BOT_TOKEN in $SLACK_BOT_TOKEN
@@ -58,72 +60,65 @@ jobs:
             - Partner Meeting Library data_source id: 8115f0ee-00c8-488a-a05b-57726af0acf4
 
             ## Step 1: Find today's meetings
-            Today in UTC: $(date -u +%Y-%m-%d)
-            POST https://api.notion.com/v1/data_sources/8115f0ee-00c8-488a-a05b-57726af0acf4/query
-            with filter: Meeting ID is not empty AND created_time on_or_after today
-            (use the Notion filter timestamp filter for this). Alternative: filter
-            on the Date property if simpler.
-            Also fetch the full data_source (all pages) for cross-reference.
+            Today (UTC): $(date -u +%Y-%m-%d).
+            Query the data_source for pages with created_time on_or_after today
+            (or Date property = today if cleaner). Also fetch the full library
+            for cross-reference.
 
-            ## Step 2: Exit silent if zero meetings
-            If no pages were created today, post NOTHING to Slack and exit.
-            (This matches Will's rule: "leave blank if none".)
+            ## Step 2: Silent exit if zero meetings
+            If no Notion pages were created today, post NOTHING and exit 0.
+            Will's rule: "leave blank if none".
 
-            ## Step 3: Extract themes from today's meetings
-            For each today-page, fetch its content via:
-              GET /v1/blocks/{page_id}/children (recursively if needed)
-            Parse the page to extract:
-              - The "Pain Points" / "Current Alternatives" section → list of
-                distinct problems (de-duped within the meeting)
-              - The "Ideal Features" section → list of features partner asked
-                for, ESPECIALLY those marked "Gap" or "Roadmap" (i.e. we don't
-                have yet). Skip features marked "Live".
+            ## Step 3: Extract feature requests + gaps from today's pages
+            For each of today's pages, fetch content via GET /v1/blocks/{page_id}/children.
+            Parse the "Ideal Features" table/section. Keep ONLY entries marked:
+              - "Gap" (we don't have it)
+              - "Roadmap" (planned, not built)
+            Drop entries marked "Live" or "In build". ALSO capture direct
+            feature asks in the partner's words from the Pain Points or Key
+            Quotes sections — phrased "can it…?", "does it…?", "we'd love…",
+            "what about X?". Deduplicate within each meeting.
 
-            ## Step 4: Cross-reference against the library
-            For each problem and each feature-gap extracted in Step 3, count how
-            many OTHER historical pages in the Partner Meeting Library mention
-            the same theme. Use semantic matching — "message overload" and
-            "too many separate texts" are the same problem. Do this via a quick
-            mental pass over page titles + Main Theme properties + content
-            snippets. Don't obsess over exact numbers; aim for roughly right.
+            ## Step 4: Cross-reference across the full library
+            For each feature/gap from today, count how many PREVIOUS historical
+            pages mention the same or semantically-equivalent ask. Use semantic
+            matching — "appointment splitting by clinic type" and "separate
+            appointments for different conditions" are the same. Don't obsess
+            over exact counts; aim for roughly right.
 
-            For each, also collect 1-2 notion page URLs where it was cited
-            previously, to link in the digest.
+            For each, collect 1-2 prior Notion page URLs where the same theme
+            came up so we can link in the digest.
 
-            ## Step 5: Compose the Slack digest
-            Target length: fits in one scroll. Use Slack blocks.
+            ## Step 5: RANK — most commonly cited elsewhere first
+            Sort all today's feature requests + gaps by descending "cited
+            elsewhere" count. Ties broken by which was stated most clearly
+            by today's partner (your judgment). Do not cap the list — include
+            every gap/feature-request from today. If a feature appeared in
+            multiple of today's meetings, merge into one bullet.
 
-            Block structure:
-              1. Header: "📊 Partner-call digest — {today date}"
-              2. Section: "*Calls today:* {N}"  (one line)
-              3. Section — "*Problems described today:*"
+            ## Step 6: Compose the Slack digest
+            Slack blocks:
+              1. Header: "📊 Partner-call feature digest — {YYYY-MM-DD}"
+              2. Section: "*Calls today:* {N}" (one line)
+              3. Section — "*Feature requests & gaps (most cited → least):*"
                  Bulleted list. Each bullet:
-                   • <problem in partner's framing> — cited <N>× elsewhere
-                     <link to one or two prior pages where same theme came up>
-              4. Section — "*Feature requests we don't have yet:*"
-                 Same format. Each bullet:
-                   • <feature as asked> — cited <N>× elsewhere
-                     <links to prior pages>
-              5. Context: small italic line linking to today's meeting posts
-                 (their Slack thread ts or Notion page URL).
+                   • *<feature or gap in partner's framing>*
+                     cited {M}× previously  (if M=0, write "new ask")
+                     <links>prior pages where cited</links>
+                     _today by: <partner/practice name>_
+              4. Context block: italic links to today's meeting posts (Notion
+                 URLs are fine).
 
-            If today has only 1 meeting, "Problems described today" can have
-            up to 5 bullets. If 3+ meetings, cap each list at 8 bullets
-            (prioritize problems cited most often elsewhere).
-
-            ## Step 6: Post to Slack
-            Write the payload to /tmp/slack_digest.json, POST via:
-              curl -X POST \
-                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            ## Step 7: Post to Slack
+            Write JSON to /tmp/slack_digest.json. POST:
+              curl -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H "Content-Type: application/json; charset=utf-8" \
-                -d @/tmp/slack_digest.json \
-                https://slack.com/api/chat.postMessage
-            Verify ok:true in the response. On error, log details and exit
-            non-zero so GitHub Actions marks the run as failed.
+                -d @/tmp/slack_digest.json https://slack.com/api/chat.postMessage
+            Verify ok:true. Exit non-zero on error.
 
             ## Tone rules (strict)
-            - No preamble like "Today we had X interesting calls..."
-            - No adjectives like "insightful", "valuable"
-            - Direct, numeric, link-heavy
-            - Problems in partner's framing, not our abstraction
-            - Never pad bullets — if only 2 problems across all meetings, use 2
+            - No preamble ("Today we had…")
+            - No adjectives ("insightful", "valuable")
+            - No problem section — only features + gaps
+            - Partner's framing, not our abstraction
+            - Never pad to hit a count
