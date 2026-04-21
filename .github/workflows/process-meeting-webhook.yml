@@ -10,15 +10,42 @@ name: Process meeting (webhook)
 on:
   repository_dispatch:
     types: [fathom_meeting_ended]
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "will | caitlin"
+        required: true
+        default: "will"
+      recording_id:
+        description: "Fathom recording_id"
+        required: true
+      title:
+        description: "Meeting title"
+        required: true
+      share_url:
+        description: "Fathom share URL slug"
+        required: true
+      scheduled_start_time:
+        description: "ISO8601 start time"
+        required: true
+      calendar_invitees_domains_type:
+        description: "one_or_more_external | all_internal"
+        required: false
+        default: "one_or_more_external"
+
+# claude-code-action needs id-token: write for its OIDC handshake.
+permissions:
+  contents: read
+  id-token: write
 
 concurrency:
   # One concurrent job per meeting. Different meetings run in parallel.
-  group: meeting-${{ github.event.client_payload.recording_id }}
+  group: meeting-${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
   cancel-in-progress: false
 
 jobs:
   process:
-    name: ${{ github.event.client_payload.account }} / ${{ github.event.client_payload.recording_id }}
+    name: ${{ github.event.client_payload.account || github.event.inputs.account }} / ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -30,12 +57,12 @@ jobs:
       - name: Run Claude Code pipeline
         uses: anthropics/claude-code-action@v1
         env:
-          RID: ${{ github.event.client_payload.recording_id }}
-          ACCOUNT: ${{ github.event.client_payload.account }}
-          TITLE: ${{ github.event.client_payload.title }}
-          SHARE_URL: ${{ github.event.client_payload.share_url }}
-          SCHEDULED_START: ${{ github.event.client_payload.scheduled_start_time }}
-          INVITEES_DOMAINS: ${{ github.event.client_payload.calendar_invitees_domains_type }}
+          RID: ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
+          ACCOUNT: ${{ github.event.client_payload.account || github.event.inputs.account }}
+          TITLE: ${{ github.event.client_payload.title || github.event.inputs.title }}
+          SHARE_URL: ${{ github.event.client_payload.share_url || github.event.inputs.share_url }}
+          SCHEDULED_START: ${{ github.event.client_payload.scheduled_start_time || github.event.inputs.scheduled_start_time }}
+          INVITEES_DOMAINS: ${{ github.event.client_payload.calendar_invitees_domains_type || github.event.inputs.calendar_invitees_domains_type }}
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
