@@ -1,0 +1,201 @@
+name: Process meeting (webhook)
+
+# Fires per-meeting when the Fathom webhook relay (Cloudflare Worker) calls
+# GitHub's repository_dispatch API. No polling, no cron — runs exactly once
+# per meeting, seconds after Fathom finishes processing the recording.
+#
+# Billing: uses CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), which
+# spends against the Max subscription, NOT pay-per-use API credits.
+
+on:
+  repository_dispatch:
+    types: [fathom_meeting_ended]
+
+concurrency:
+  # One concurrent job per meeting. Different meetings run in parallel.
+  group: meeting-${{ github.event.client_payload.recording_id }}
+  cancel-in-progress: false
+
+jobs:
+  process:
+    name: ${{ github.event.client_payload.account }} / ${{ github.event.client_payload.recording_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Run Claude Code pipeline
+        uses: anthropics/claude-code-action@v1
+        env:
+          RID: ${{ github.event.client_payload.recording_id }}
+          ACCOUNT: ${{ github.event.client_payload.account }}
+          TITLE: ${{ github.event.client_payload.title }}
+          SHARE_URL: ${{ github.event.client_payload.share_url }}
+          SCHEDULED_START: ${{ github.event.client_payload.scheduled_start_time }}
+          INVITEES_DOMAINS: ${{ github.event.client_payload.calendar_invitees_domains_type }}
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowedTools Bash,Read,Write,Edit,Grep,Glob
+            --max-turns 40
+          prompt: |
+            You are processing ONE specific Fathom meeting that just ended. All
+            metadata is in environment variables. Do NOT poll Fathom for other
+            meetings. Do NOT try to dedupe against Notion — the webhook fires
+            exactly once per meeting, so duplicate protection is unnecessary.
+            If any step fails fatally, post a :rotating_light: alert to Slack
+            C0APW8DSA4R before exiting.
+
+            ## Inputs (from env)
+            - $RID — recording_id
+            - $ACCOUNT — "will" or "caitlin" (which Fathom account owns it)
+            - $TITLE — meeting title
+            - $SHARE_URL — Fathom share URL slug (append "?timestamp=SECS" for Watch links)
+            - $SCHEDULED_START — ISO timestamp
+            - $INVITEES_DOMAINS — "all_internal" or "one_or_more_external"
+
+            ## Scope filter (check first, bail if not a fit)
+            1. Must be external: $INVITEES_DOMAINS == "one_or_more_external". If not, exit quietly.
+            2. Must be about Planner: fetch the transcript (step 1 below) and
+               count case-insensitive "planner" occurrences. If < 3, exit
+               quietly and post NOTHING to Slack.
+
+            ## Credentials
+            Use the right Fathom key for the account:
+              - account=will   → $FATHOM_WILL_KEY
+              - account=caitlin → $FATHOM_CAITLIN_KEY
+
+            Slack token: $SLACK_BOT_TOKEN. Channel: C0APW8DSA4R only.
+            Notion integration token: $NOTION_TOKEN. Use Notion REST API
+            (https://api.notion.com/v1/...) with header
+            "Authorization: Bearer $NOTION_TOKEN" and
+            "Notion-Version: 2022-06-28".
+
+            Partner Meeting Library data source (database) id:
+              8115f0ee-00c8-488a-a05b-57726af0acf4
+            Master Synthesis page id:
+              33135d37-7c69-81fd-9d3c-cac9340ebc2f
+
+            ## Step 1: Transcript
+            curl -s -H "X-Api-Key: $KEY" \
+              "https://api.fathom.ai/external/v1/recordings/$RID/transcript" \
+              > /tmp/tx.json
+            Timestamps are HH:MM:SS — convert to seconds for Watch links.
+
+            ## Step 2: Analyse (full format, no TLDR)
+            - Problem Statement — 4-5 sentences about practice size, system
+              (EMIS/SystmOne), geography, current recall setup.
+            - Pain Points — 5 to 8 bullets, each with a verbatim quote AND a
+              Watch link (${SHARE_URL}?timestamp=SECS) AND the current workaround.
+            - Current Alternatives — tools they use today, what's broken.
+            - Dream Solution — MOST IMPORTANT. 2-3 verbatim quotes with Watch
+              links, plus the implicit wishes behind them.
+            - Ideal Features — 5 to 10 rows: feature name, urgency
+              (High/Medium/Low), Planner status (Live / In build / Roadmap / Gap).
+            - Key Quotes — EXACTLY 10 quotes with Watch links, categorised:
+              :red_circle: PROBLEM x3, :star: DREAM x3, :fire: REACTION x2,
+              :zap: POWERFUL x2.
+            - Opportunity Signal — High/Medium/Low with rationale.
+            - Product Implications — 5 to 8 actionable bullets.
+            - 14 Discovery Questions — 2-3 sentences each.
+
+            ## Step 3: Notion page (REST API)
+            POST https://api.notion.com/v1/pages
+            Parent: { "type":"database_id", "database_id":"8115f0ee-00c8-488a-a05b-57726af0acf4" }
+            Icon: { "type":"emoji", "emoji":"🏥" }
+            Properties:
+              Meeting (title) — "Practice — Lead Person (date)"
+              Meeting ID (rich_text) — "$RID"
+              Fathom Recording (url) — "https://fathom.video/share/$SHARE_URL"
+              Opportunity Signal (select) — High/Medium/Low
+              Main Theme (multi_select) — ONE of: Data Accuracy, Automation,
+                SMS and Comms, Onboarding, SystmOne, Recall Workflow, QOF,
+                Booking Links, Churn Risk, Upsell, Feature Request, Competitive Intel
+              Status (select) — "New"
+              Date (date) — { start: "$SCHEDULED_START", is_datetime: true } if the
+                property name is "Date" and supports datetime; otherwise adjust.
+            Children: full markdown analysis rendered as Notion blocks (heading_2
+            for sections, bulleted_list_item for bullets, quote for pull-quotes,
+            paragraph for prose). Convert quote Watch links to inline links via
+            the rich_text "link" field.
+
+            Capture the returned page id + url.
+
+            ## Step 4: Master Synthesis update
+            Prepend a new chronological entry to page id
+            33135d37-7c69-81fd-9d3c-cac9340ebc2f, BEFORE the first existing ###
+            heading below "## Chronological Feed". Format:
+              ### {YYYY-MM-DD} — {Practice} ({Person})
+              **Attendees**: ... | **Signal**: {emoji} {High/Medium/Low}
+              {one-paragraph summary with 2-3 italic direct quotes}
+              [View full analysis]({notion_page_url}) | [Watch recording](https://fathom.video/share/$SHARE_URL)
+
+            Use Notion REST API:
+              1. GET /v1/blocks/{page_id}/children to find the first ### after "Chronological Feed"
+              2. PATCH /v1/blocks/{page_id}/children with "after": "<id-of-Chronological-Feed-heading>"
+                 to insert the new blocks above the previous first entry.
+
+            ## Step 5: Slack main post
+            Channel C0APW8DSA4R. Write JSON to /tmp/slack_main.json, POST via
+            curl -d @file to https://slack.com/api/chat.postMessage with header
+            "Authorization: Bearer $SLACK_BOT_TOKEN" and
+            "Content-Type: application/json; charset=utf-8".
+
+            Blocks (must all be present):
+              1. header — practice name
+              2. section with fields: Practice, Date, Signal, Themes
+              3. section with attendees + source ("Will's Fathom" / "Caitlin's Fathom")
+              4. section — 3 numbered Key Takeaways
+              5. divider
+              6. section — Dream Solution as blockquote
+              7. section — 5 Ideal Features (bulleted, each with urgency)
+              8. actions — two buttons: "Open in Notion" ({notion_page_url}) and
+                 "Watch on Fathom" (https://fathom.video/share/$SHARE_URL)
+
+            Capture the "ts" from the response (main_ts).
+
+            ## Step 6: Slack thread reply — 10 Key Quotes
+            POST chat.postMessage with thread_ts=main_ts. Single message with all
+            10 quotes grouped by emoji category (:red_circle:, :star:, :fire:,
+            :zap:) — Slack-format links: <https://fathom.video/share/$SHARE_URL?timestamp=SECS|Watch>.
+
+            ## Step 7: 5 video clips (required when m3u8 is accessible)
+            Probe: curl -sI "https://fathom.video/share/$SHARE_URL/video.m3u8" | head -1
+            Also verify the body starts with "#EXTM3U":
+              curl -s "https://fathom.video/share/$SHARE_URL/video.m3u8" | head -c 10
+            If HTTP 404/403 OR body isn't #EXTM3U, skip clips for this meeting
+            but DO NOT fail the run. (The main post + thread already have
+            Watch links.) Log it and move on.
+
+            Otherwise, for the 5 most narratively powerful quotes:
+              for each quote with timestamp TS (in seconds):
+                timeout 90 ffmpeg -y \
+                  -i "https://fathom.video/share/$SHARE_URL/video.m3u8" \
+                  -ss $((TS-5)) -t 20 \
+                  -c:v libx264 -preset ultrafast -crf 28 \
+                  -c:a aac -b:a 128k \
+                  -movflags +faststart \
+                  /tmp/c.mp4
+                if /tmp/c.mp4 exists and >1000 bytes:
+                  Slack 3-step upload:
+                    POST files.getUploadURLExternal — get upload_url + file_id
+                    PUT file to upload_url
+                    POST files.completeUploadExternal with thread_ts=main_ts,
+                         initial_comment="$EMOJI _\"$QUOTE\"_ — $SPEAKER",
+                         channel_id="C0APW8DSA4R",
+                         files=[{ id:file_id, title:"..." }]
+                rm -f /tmp/c.mp4
+            Use :one:…:five: emoji prefixes on the 5 clips in narrative order.
+            Never block prior steps on clip failures.
+
+            ## Context
+            Suvera builds Planner, a QOF recall tool for NHS GP practices and
+            PCNs. Partners are GP Practices and PCNs. Internal meetings and
+            non-Planner product lines are out of scope.
