@@ -1,0 +1,128 @@
+name: Daily summary
+
+# Posts a concise "what happened today" digest to Slack every weekday at
+# 18:30 UTC. Uses Claude Code under CLAUDE_CODE_OAUTH_TOKEN (Max subscription,
+# no API billing). Reads today's new Notion Partner Meeting Library pages and
+# cross-references themes against the full library for frequency counts.
+#
+# Output format in Slack: very concise
+#   - Calls today: N  (or silent if 0)
+#   - Problems described today (each with "cited N× elsewhere" count + links)
+#   - Feature requests we don't have today (same)
+#
+# Subscription-funded, zero API credits consumed.
+
+on:
+  schedule:
+    # 18:30 UTC Mon-Fri = 19:30 BST — late afternoon after UK partner calls
+    # have finished + been processed by the webhook pipeline.
+    - cron: '30 18 * * 1-5'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: daily-summary
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run summary pipeline
+        uses: anthropics/claude-code-action@v1
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowedTools Bash,Read,Write,Edit,Grep,Glob
+            --max-turns 50
+          prompt: |
+            You are posting today's concise partner-meeting digest to Slack.
+            Be ruthlessly brief — highest-yield items only, no filler.
+
+            ## Credentials
+            - NOTION_TOKEN in $NOTION_TOKEN — use REST API with headers:
+                Authorization: Bearer $NOTION_TOKEN
+                Notion-Version: 2025-09-03
+            - SLACK_BOT_TOKEN in $SLACK_BOT_TOKEN
+            - Channel: C0APW8DSA4R (ONLY post to this channel)
+            - Partner Meeting Library data_source id: 8115f0ee-00c8-488a-a05b-57726af0acf4
+
+            ## Step 1: Find today's meetings
+            Today in UTC: $(date -u +%Y-%m-%d)
+            POST https://api.notion.com/v1/data_sources/8115f0ee-00c8-488a-a05b-57726af0acf4/query
+            with filter: Meeting ID is not empty AND created_time on_or_after today
+            (use the Notion filter timestamp filter for this). Alternative: filter
+            on the Date property if simpler.
+            Also fetch the full data_source (all pages) for cross-reference.
+
+            ## Step 2: Exit silent if zero meetings
+            If no pages were created today, post NOTHING to Slack and exit.
+            (This matches Will's rule: "leave blank if none".)
+
+            ## Step 3: Extract themes from today's meetings
+            For each today-page, fetch its content via:
+              GET /v1/blocks/{page_id}/children (recursively if needed)
+            Parse the page to extract:
+              - The "Pain Points" / "Current Alternatives" section → list of
+                distinct problems (de-duped within the meeting)
+              - The "Ideal Features" section → list of features partner asked
+                for, ESPECIALLY those marked "Gap" or "Roadmap" (i.e. we don't
+                have yet). Skip features marked "Live".
+
+            ## Step 4: Cross-reference against the library
+            For each problem and each feature-gap extracted in Step 3, count how
+            many OTHER historical pages in the Partner Meeting Library mention
+            the same theme. Use semantic matching — "message overload" and
+            "too many separate texts" are the same problem. Do this via a quick
+            mental pass over page titles + Main Theme properties + content
+            snippets. Don't obsess over exact numbers; aim for roughly right.
+
+            For each, also collect 1-2 notion page URLs where it was cited
+            previously, to link in the digest.
+
+            ## Step 5: Compose the Slack digest
+            Target length: fits in one scroll. Use Slack blocks.
+
+            Block structure:
+              1. Header: "📊 Partner-call digest — {today date}"
+              2. Section: "*Calls today:* {N}"  (one line)
+              3. Section — "*Problems described today:*"
+                 Bulleted list. Each bullet:
+                   • <problem in partner's framing> — cited <N>× elsewhere
+                     <link to one or two prior pages where same theme came up>
+              4. Section — "*Feature requests we don't have yet:*"
+                 Same format. Each bullet:
+                   • <feature as asked> — cited <N>× elsewhere
+                     <links to prior pages>
+              5. Context: small italic line linking to today's meeting posts
+                 (their Slack thread ts or Notion page URL).
+
+            If today has only 1 meeting, "Problems described today" can have
+            up to 5 bullets. If 3+ meetings, cap each list at 8 bullets
+            (prioritize problems cited most often elsewhere).
+
+            ## Step 6: Post to Slack
+            Write the payload to /tmp/slack_digest.json, POST via:
+              curl -X POST \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-Type: application/json; charset=utf-8" \
+                -d @/tmp/slack_digest.json \
+                https://slack.com/api/chat.postMessage
+            Verify ok:true in the response. On error, log details and exit
+            non-zero so GitHub Actions marks the run as failed.
+
+            ## Tone rules (strict)
+            - No preamble like "Today we had X interesting calls..."
+            - No adjectives like "insightful", "valuable"
+            - Direct, numeric, link-heavy
+            - Problems in partner's framing, not our abstraction
+            - Never pad bullets — if only 2 problems across all meetings, use 2
