@@ -71,7 +71,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Grep,Glob
-            --max-turns 40
+            --max-turns 80
           prompt: |
             You are processing ONE specific Fathom meeting that just ended. All
             metadata is in environment variables. Do NOT poll Fathom for other
