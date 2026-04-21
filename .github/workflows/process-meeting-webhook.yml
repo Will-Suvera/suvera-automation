@@ -47,7 +47,7 @@ jobs:
   process:
     name: ${{ github.event.client_payload.account || github.event.inputs.account }} / ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
