@@ -84,7 +84,9 @@ jobs:
             - $RID — recording_id
             - $ACCOUNT — "will" or "caitlin" (which Fathom account owns it)
             - $TITLE — meeting title
-            - $SHARE_URL — Fathom share URL slug (append "?timestamp=SECS" for Watch links)
+            - $SHARE_URL — Full Fathom share URL (e.g. https://fathom.video/share/SLUG).
+              Watch links: append "?timestamp=SECS". m3u8 probe: append "/video.m3u8".
+              Do NOT prepend "https://fathom.video/share/" again — it's already in there.
             - $SCHEDULED_START — ISO timestamp
             - $INVITEES_DOMAINS — "all_internal" or "one_or_more_external"
 
@@ -147,7 +149,7 @@ jobs:
             Properties:
               Meeting (title) — "Practice — Lead Person (date)"
               Meeting ID (rich_text) — "$RID"
-              Fathom Recording (url) — "https://fathom.video/share/$SHARE_URL"
+              Fathom Recording (url) — "$SHARE_URL"
               Opportunity Signal (select) — High/Medium/Low
               Main Theme (multi_select) — ONE of: Data Accuracy, Automation,
                 SMS and Comms, Onboarding, SystmOne, Recall Workflow, QOF,
@@ -169,7 +171,7 @@ jobs:
               ### {YYYY-MM-DD} — {Practice} ({Person})
               **Attendees**: ... | **Signal**: {emoji} {High/Medium/Low}
               {one-paragraph summary with 2-3 italic direct quotes}
-              [View full analysis]({notion_page_url}) | [Watch recording](https://fathom.video/share/$SHARE_URL)
+              [View full analysis]({notion_page_url}) | [Watch recording]($SHARE_URL)
 
             Use Notion REST API:
               1. GET /v1/blocks/{page_id}/children to find the first ### after "Chronological Feed"
@@ -191,19 +193,19 @@ jobs:
               6. section — Dream Solution as blockquote
               7. section — 5 Ideal Features (bulleted, each with urgency)
               8. actions — two buttons: "Open in Notion" ({notion_page_url}) and
-                 "Watch on Fathom" (https://fathom.video/share/$SHARE_URL)
+                 "Watch on Fathom" ($SHARE_URL)
 
             Capture the "ts" from the response (main_ts).
 
             ## Step 6: Slack thread reply — 10 Key Quotes
             POST chat.postMessage with thread_ts=main_ts. Single message with all
             10 quotes grouped by emoji category (:red_circle:, :star:, :fire:,
-            :zap:) — Slack-format links: <https://fathom.video/share/$SHARE_URL?timestamp=SECS|Watch>.
+            :zap:) — Slack-format links: <$SHARE_URL?timestamp=SECS|Watch>.
 
             ## Step 7: 5 video clips (required when m3u8 is accessible)
-            Probe: curl -sI "https://fathom.video/share/$SHARE_URL/video.m3u8" | head -1
+            Probe: curl -sI "$SHARE_URL/video.m3u8" | head -1
             Also verify the body starts with "#EXTM3U":
-              curl -s "https://fathom.video/share/$SHARE_URL/video.m3u8" | head -c 10
+              curl -s "$SHARE_URL/video.m3u8" | head -c 10
             If HTTP 404/403 OR body isn't #EXTM3U, skip clips for this meeting
             but DO NOT fail the run. (The main post + thread already have
             Watch links.) Log it and move on.
@@ -211,7 +213,7 @@ jobs:
             Otherwise, for the 5 most narratively powerful quotes:
               for each quote with timestamp TS (in seconds):
                 timeout 90 ffmpeg -y \
-                  -i "https://fathom.video/share/$SHARE_URL/video.m3u8" \
+                  -i "$SHARE_URL/video.m3u8" \
                   -ss $((TS-5)) -t 20 \
                   -c:v libx264 -preset ultrafast -crf 28 \
                   -c:a aac -b:a 128k \
