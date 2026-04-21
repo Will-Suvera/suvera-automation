@@ -1,38 +1,60 @@
 # suvera-automation
 
-Automation for Suvera's commercial / product-feedback workflows. Currently one
-workflow lives here: firing the `/process-meetings` pipeline every 5 minutes so
-new Fathom partner meetings land in Notion + Slack within minutes of ending.
+Automation for Suvera's commercial / product-feedback workflows. Two
+workflows:
+
+1. **process-meetings** — every 5 min during UK working hours, fires the
+   Claude Code routine that polls Fathom → Notion → Slack with clips.
+2. **watchdog** — once daily at 19:30 UTC, reconciles Fathom directly
+   against what the routine claims to have processed. Posts a list to
+   Slack so Will can eyeball drift.
+
+GitHub Actions is the sole cron. Both claude.ai-side scheduled triggers
+have been disabled (they were hitting rate limits).
 
 ## What's here
 
-- `.github/workflows/process-meetings.yml` — runs every 5 min (GitHub Actions
-  cron minimum) and POSTs to the Claude Code
-  `POST /v1/claude_code/routines/{id}/fire` endpoint on `api.anthropic.com`.
-  The actual pipeline (poll Fathom → dedupe → Notion page → Master Synthesis
-  → Slack main + thread → 5 video clips) lives inside the routine's prompt,
-  not this repo. That keeps the workflow minimal.
+- `.github/workflows/process-meetings.yml` — every 5 min Mon–Fri 07:00–18:59
+  UTC. POSTs to `POST /v1/claude_code/routines/{id}/fire` on
+  `api.anthropic.com`. The pipeline (poll Fathom → dedupe → Notion page →
+  Master Synthesis → Slack main + thread → 5 video clips) lives inside the
+  routine's prompt, not this repo.
 
   API reference: https://code.claude.com/docs/en/routines#add-an-api-trigger
 
+- `.github/workflows/watchdog.yml` — pure bash, no Claude call. Queries
+  Fathom Will + Caitlin accounts for the last 24h of external meetings,
+  counts "Planner" mentions in each transcript, and posts a reconciliation
+  report to Slack `C0APW8DSA4R`. Exists because the 2026-04-17 incident
+  showed the main routine can silently no-op (routine fires, Fathom returns
+  meetings, Notion creates fail, nobody notices). The watchdog is
+  independent of the routine, so if the routine is broken the watchdog
+  still reports what *should* have been processed.
+
 ## Setup
 
-1. **Add an API trigger to the routine**:
+1. **Add an API trigger to the routine** (one-time):
    - Go to https://claude.ai/code/routines
    - Click the `process-meetings-auto` routine
    - Click the pencil icon (Edit routine)
    - Scroll to **Select a trigger** → **Add another trigger** → **API**
    - Click **Generate token**, copy immediately (shown once only)
 
-2. **Secrets** — in GitHub repo settings → Secrets and variables → Actions:
-   - `CLAUDE_API_TOKEN` — the `sk-ant-oat01-...` token from step 1.
-   - `TRIGGER_ID` — the routine ID. Current value:
-     `trig_01XNRjSRFpiybi9bVYXvEYJd` (the `process-meetings-auto` routine).
-     Routine IDs use the `trig_` prefix — the path parameter in the `/fire`
-     URL is the same ID you see in the CLI / `RemoteTrigger.list`.
+2. **GitHub Secrets** — in repo settings → Secrets and variables → Actions:
 
-2. **Verify** — after pushing, go to the Actions tab → "Process Fathom
-   meetings" → **Run workflow** to fire a one-off run. Inspect the logs.
+   For `process-meetings.yml`:
+   - `CLAUDE_API_TOKEN` — the `sk-ant-oat01-...` token from step 1.
+   - `TRIGGER_ID` — `trig_01XNRjSRFpiybi9bVYXvEYJd`
+     (the `process-meetings-auto` routine).
+
+   For `watchdog.yml`:
+   - `FATHOM_WILL_KEY` — Will's Fathom API key.
+   - `FATHOM_CAITLIN_KEY` — Caitlin's Fathom API key.
+   - `SLACK_BOT_TOKEN` — `xoxb-...` bot token with `chat:write` scope
+     for channel `C0APW8DSA4R`.
+
+3. **Verify** — Actions tab → pick the workflow → **Run workflow** for a
+   one-off run. Inspect logs.
 
 ## Why this shape
 
@@ -44,10 +66,15 @@ new Fathom partner meetings land in Notion + Slack within minutes of ending.
 - **Trigger body is delegated** — all credentials (Fathom, Slack, Notion)
   stay embedded in the trigger prompt on claude.ai. Only the short-lived
   claude.ai API token needs to live in GitHub Secrets.
-- **Belt and braces** — the hourly scheduled trigger on claude.ai itself
-  also stays enabled, so if GitHub Actions has a cron hiccup (they can be
-  delayed 5–15 min under load), the hourly poll still catches everything
-  within an hour.
+- **No claude.ai cron** — both claude.ai-side scheduled triggers
+  (`trig_01XNRjSRFpiybi9bVYXvEYJd` hourly, and `trig_016CBXjpF48xxLL4zd3FmSnn`
+  hourly) have been disabled because they were driving
+  subscription rate limits. GitHub Actions is the only thing that fires
+  the routine now; the API trigger on the routine stays active.
+- **Belt-and-braces moved to the watchdog** — if GH Actions has a cron
+  hiccup (they can be delayed 5–15 min under load) the next fire catches
+  it; if the routine itself silently breaks, the daily watchdog surfaces
+  it.
 
 ## Future
 

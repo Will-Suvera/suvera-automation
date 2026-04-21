@@ -1,0 +1,116 @@
+name: Watchdog — daily reconciliation
+
+# Once-daily reconciliation check. Independent of the main routine:
+# queries Fathom directly, counts "Planner" mentions in each transcript,
+# and posts a list to Slack so Will can eyeball whether the main routine
+# silently missed anything today.
+#
+# Designed to catch the Friday 2026-04-17 failure mode: routine fires,
+# Fathom returns meetings, but Notion creates fail silently (e.g. missing
+# MCP permissions). Watchdog doesn't touch Notion or the routine — it
+# reports what the routine *should have* processed so drift is visible.
+
+on:
+  schedule:
+    # 19:30 UTC Mon–Fri — 20:30 BST, after UK working hours so all of
+    # today's meetings have ended + been transcribed.
+    - cron: '30 19 * * 1-5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile Fathom vs Slack
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query Fathom and post Slack report
+        env:
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -eu
+
+          for v in FATHOM_WILL_KEY FATHOM_CAITLIN_KEY SLACK_BOT_TOKEN; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Missing secret: $v"
+              exit 1
+            fi
+          done
+
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          TODAY=$(date -u +%Y-%m-%d)
+          CHANNEL="C0APW8DSA4R"
+
+          fetch_meetings() {
+            local label=$1 key=$2
+            curl -sS -H "X-Api-Key: ${key}" \
+              "https://api.fathom.ai/external/v1/meetings?created_after=${SINCE}&include_summary=false" \
+              | jq --arg label "$label" \
+                '[.items[]? | select([.invitees[]?.is_external] | any) | {label: $label, rid: .recording_id, title: .title, share_url: .share_url, start: .scheduled_start_time}]'
+          }
+
+          WILL=$(fetch_meetings "Will" "${FATHOM_WILL_KEY}")
+          CAITLIN=$(fetch_meetings "Caitlin" "${FATHOM_CAITLIN_KEY}")
+          ALL=$(jq -n --argjson a "$WILL" --argjson b "$CAITLIN" '$a + $b')
+
+          echo "--- external meetings in last 24h ---"
+          echo "$ALL" | jq '.'
+
+          COUNT=$(echo "$ALL" | jq 'length')
+
+          REPORT_LINES=""
+          QUALIFY_COUNT=0
+          SKIP_COUNT=0
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            RID=$(echo "$ALL"     | jq -r ".[$i].rid")
+            TITLE=$(echo "$ALL"   | jq -r ".[$i].title")
+            LABEL=$(echo "$ALL"   | jq -r ".[$i].label")
+            SHARE=$(echo "$ALL"   | jq -r ".[$i].share_url")
+
+            if [ "$LABEL" = "Will" ]; then KEY="${FATHOM_WILL_KEY}"; else KEY="${FATHOM_CAITLIN_KEY}"; fi
+
+            PLANNER_N=$(curl -sS -H "X-Api-Key: ${KEY}" \
+              "https://api.fathom.ai/external/v1/recordings/${RID}/transcript" \
+              | grep -iEo 'planner' | wc -l | tr -d ' ')
+
+            if [ "${PLANNER_N:-0}" -ge 3 ]; then
+              MARK="✅ qualifies"
+              QUALIFY_COUNT=$((QUALIFY_COUNT + 1))
+            else
+              MARK="⚪ below threshold"
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+            fi
+
+            REPORT_LINES+="• *${TITLE}* (${LABEL}, RID \`${RID}\`) — Planner mentions: ${PLANNER_N} ${MARK}\n  <https://fathom.video/share/${SHARE}|Open in Fathom>\n"
+          done
+
+          if [ "$COUNT" -eq 0 ]; then
+            REPORT_LINES="_No external meetings in Fathom in the last 24h._"
+          fi
+
+          HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥3 mentions)."
+          FOOTER="👉 Cross-check: every qualifying meeting above should have a corresponding main-post + thread in this channel today. If one is missing, the routine silently skipped it — re-fire with \`gh workflow run process-meetings.yml\` from the suvera-automation repo."
+
+          TEXT=$(printf "%s\n\n%s\n%s" "$HEADER" "$REPORT_LINES" "$FOOTER")
+
+          PAYLOAD=$(jq -nc --arg ch "$CHANNEL" --arg text "$TEXT" \
+            '{channel: $ch, text: $text, blocks: [{type:"section", text:{type:"mrkdwn", text: $text}}]}')
+
+          RESP=$(curl -sS -X POST \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$PAYLOAD" \
+            https://slack.com/api/chat.postMessage)
+
+          OK=$(echo "$RESP" | jq -r '.ok')
+          echo "Slack response: $RESP"
+          if [ "$OK" != "true" ]; then
+            echo "::error::Slack post failed"
+            exit 1
+          fi
