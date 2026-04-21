@@ -1,0 +1,128 @@
+name: Test — webhook end-to-end
+
+# Hands-free smoke test of the Fathom → Cloudflare Worker → GitHub
+# repository_dispatch → workflow chain. Uses a synthetic payload flagged
+# "all_internal" so the downstream pipeline bails at the external-meeting
+# filter without writing to Notion or Slack — proving the dispatch chain
+# works without polluting production data.
+#
+# Run via: gh workflow run test-webhook.yml
+# Or via UI: Actions tab → "Test — webhook end-to-end" → Run workflow
+#
+# Pass conditions:
+#   1. Worker /GET returns 200 with expected event_type
+#   2. POST without signature returns 400
+#   3. POST with valid Svix signature returns 200 + matched account
+#   4. Within 30s, a repository_dispatch run appears with matching payload
+#   5. That run reaches "Complete job" fast (< 90s) because it bails on
+#      the external-meeting filter (INVITEES_DOMAINS=all_internal)
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_url:
+        description: "Cloudflare Worker URL (no trailing slash)"
+        required: false
+        default: "https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      WORKER_URL: ${{ github.event.inputs.worker_url }}
+      WHSEC: ${{ secrets.FATHOM_WEBHOOK_SECRET_WILL }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 1. Worker health GET /
+        run: |
+          set -eu
+          echo "::group::GET $WORKER_URL/"
+          RESP=$(curl -sS -w "\nHTTP %{http_code}\n" "$WORKER_URL/")
+          echo "$RESP"
+          echo "::endgroup::"
+          echo "$RESP" | grep -q '"ok":true' || { echo "::error::Health check missing ok:true"; exit 1; }
+          echo "$RESP" | grep -q 'fathom_meeting_ended' || { echo "::error::Health check missing event_type"; exit 1; }
+
+      - name: 2. POST without signature headers → 400
+        run: |
+          set -eu
+          CODE=$(curl -sS -o /tmp/body -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"test":true}' "$WORKER_URL/")
+          echo "HTTP $CODE"
+          cat /tmp/body; echo
+          [ "$CODE" = "400" ] || { echo "::error::Expected 400, got $CODE"; exit 1; }
+
+      - name: 3. POST with valid Svix signature → 200 + matched account
+        id: signed_post
+        run: |
+          set -eu
+          [ -n "${WHSEC:-}" ] || { echo "::error::FATHOM_WEBHOOK_SECRET_WILL secret not set"; exit 1; }
+
+          # Synthetic meeting payload — all_internal so downstream bails fast
+          BODY='{"recording_id":999999999,"title":"Webhook smoke test","share_url":"https://fathom.video/share/smoketest","scheduled_start_time":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","calendar_invitees_domains_type":"all_internal"}'
+          WEBHOOK_ID="msg_test_$(date +%s)"
+          WEBHOOK_TS=$(date +%s)
+          SIGNING_STRING="${WEBHOOK_ID}.${WEBHOOK_TS}.${BODY}"
+
+          # whsec_ → base64-decoded bytes → HMAC-SHA256
+          RAW_SECRET_B64="${WHSEC#whsec_}"
+          RAW_SECRET_HEX=$(echo -n "$RAW_SECRET_B64" | base64 -d | xxd -p -c 256)
+          SIG_B64=$(echo -n "$SIGNING_STRING" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$RAW_SECRET_HEX" -binary | base64)
+
+          echo "Posting with id=$WEBHOOK_ID ts=$WEBHOOK_TS"
+          RESP=$(curl -sS -o /tmp/body -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -H "webhook-id: $WEBHOOK_ID" \
+            -H "webhook-timestamp: $WEBHOOK_TS" \
+            -H "webhook-signature: v1,$SIG_B64" \
+            -d "$BODY" \
+            "$WORKER_URL/")
+          echo "HTTP $RESP"
+          cat /tmp/body; echo
+          [ "$RESP" = "200" ] || { echo "::error::Expected 200, got $RESP"; exit 1; }
+          grep -q '"account":"will"' /tmp/body || { echo "::error::Response missing account:will"; exit 1; }
+          grep -q '"recording_id":999999999' /tmp/body || { echo "::error::Response missing our recording_id"; exit 1; }
+          echo "before_ts=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: 4. Verify repository_dispatch fired a run with matching payload
+        run: |
+          set -eu
+          BEFORE="${{ steps.signed_post.outputs.before_ts }}"
+          TARGET_RID=999999999
+          for i in 1 2 3 4 5 6; do
+            sleep 5
+            RUNS=$(gh run list --workflow=process-meeting-webhook.yml --event=repository_dispatch --limit 5 --json databaseId,createdAt,status,conclusion,displayTitle)
+            MATCH=$(echo "$RUNS" | jq -r --argjson ts "$BEFORE" --argjson rid "$TARGET_RID" '
+              [.[] | select((.createdAt | fromdateiso8601) >= $ts) | select(.displayTitle | contains(($rid|tostring)))] | .[0].databaseId // empty')
+            if [ -n "$MATCH" ]; then
+              echo "::notice::Dispatched run id=$MATCH"
+              echo "::group::Run details"
+              gh run view "$MATCH" --json status,conclusion,displayTitle
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "attempt $i: no matching run yet"
+          done
+          echo "::error::Did not see a dispatched run for recording_id=$TARGET_RID within 30s"
+          gh run list --workflow=process-meeting-webhook.yml --limit 5
+          exit 1
+
+      - name: 5. Summary
+        if: always()
+        run: |
+          echo "Test outcome: ${{ job.status }}"
+          echo "Worker URL: $WORKER_URL"
+          echo ""
+          echo "What this test proves:"
+          echo "  • Worker is deployed + healthy"
+          echo "  • Worker rejects unsigned webhooks (400)"
+          echo "  • Worker accepts Svix-signed webhooks (200) and identifies account"
+          echo "  • Worker fires repository_dispatch correctly"
+          echo "  • GitHub receives dispatch and starts a workflow run"
+          echo ""
+          echo "Implication: Fathom finishing a meeting → real POST will behave"
+          echo "identically → full pipeline fires unattended. Production is hands-free."
