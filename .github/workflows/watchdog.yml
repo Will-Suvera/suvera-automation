@@ -51,7 +51,7 @@ jobs:
             curl -sS -H "X-Api-Key: ${key}" \
               "https://api.fathom.ai/external/v1/meetings?created_after=${SINCE}&include_summary=false" \
               | jq --arg label "$label" \
-                '[.items[]? | select([.invitees[]?.is_external] | any) | {label: $label, rid: .recording_id, title: .title, share_url: .share_url, start: .scheduled_start_time}]'
+                '[.items[]? | select(.calendar_invitees_domains_type == "one_or_more_external") | {label: $label, rid: .recording_id, title: .title, share_url: .share_url, start: .scheduled_start_time}]'
           }
 
           WILL=$(fetch_meetings "Will" "${FATHOM_WILL_KEY}")
