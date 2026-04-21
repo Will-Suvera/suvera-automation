@@ -210,8 +210,21 @@ jobs:
             but DO NOT fail the run. (The main post + thread already have
             Watch links.) Log it and move on.
 
-            Otherwise, for the 5 most narratively powerful quotes:
-              for each quote with timestamp TS (in seconds):
+            Otherwise, pick the 5 most impactful clips by **insights-per-second**,
+            in this priority order (bias to the top — skip problems if you have
+            enough praise/feature moments):
+              1. Extreme praise / happy reactions — partner reacting enthusiastically
+                 to what they see ("wow", "love that", "this is exactly what we need",
+                 audible delight). Pick these FIRST.
+              2. High-value insights or feature requests — partner saying "I want X",
+                 "can it do Y?", specific feature asks revealing roadmap opportunity.
+              3. Clear problem articulation — only after 1 & 2 are exhausted.
+            Target mix: ~2 praise + ~2 feature/insight + ~1 problem. Never default
+            to 5 problems. Skip rambling/low-density quotes even if they're long.
+            The text Key Quotes thread (Step 6) already captured the problems —
+            clips add emotional texture the text cannot.
+
+            For each selected quote with timestamp TS (in seconds):
                 timeout 90 ffmpeg -y \
                   -i "$SHARE_URL/video.m3u8" \
                   -ss $((TS-5)) -t 20 \
