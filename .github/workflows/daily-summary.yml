@@ -14,9 +14,10 @@ name: Daily summary
 
 on:
   schedule:
-    # 18:30 UTC Mon-Fri = 19:30 BST — late afternoon after UK partner calls
-    # have finished + been processed by the webhook pipeline.
-    - cron: '30 18 * * 1-5'
+    # 16:00 UTC daily = 17:00 BST (UK summer) / 16:00 GMT (UK winter).
+    # Every day including weekends — partner calls occasionally happen on
+    # weekends and Will wants visibility.
+    - cron: '0 16 * * *'
   workflow_dispatch: {}
 
 permissions:
