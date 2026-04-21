@@ -210,19 +210,35 @@ jobs:
             but DO NOT fail the run. (The main post + thread already have
             Watch links.) Log it and move on.
 
-            Otherwise, pick the 5 most impactful clips by **insights-per-second**,
-            in this priority order (bias to the top — skip problems if you have
-            enough praise/feature moments):
-              1. Extreme praise / happy reactions — partner reacting enthusiastically
-                 to what they see ("wow", "love that", "this is exactly what we need",
-                 audible delight). Pick these FIRST.
-              2. High-value insights or feature requests — partner saying "I want X",
-                 "can it do Y?", specific feature asks revealing roadmap opportunity.
-              3. Clear problem articulation — only after 1 & 2 are exhausted.
-            Target mix: ~2 praise + ~2 feature/insight + ~1 problem. Never default
-            to 5 problems. Skip rambling/low-density quotes even if they're long.
-            The text Key Quotes thread (Step 6) already captured the problems —
-            clips add emotional texture the text cannot.
+            Otherwise, pick clips under **strict** criteria. Quantity is flexible
+            — typically 5, up to **10 clips** if high-yield material genuinely
+            warrants it. Fewer high-quality clips beat more mediocre ones.
+            Priority order (descend only if higher tiers are exhausted):
+
+              TIER 1 — VERY HIGH explicit praise:
+                Partner audibly enthused about what they see. "Wow", "this is
+                amazing", "I love that", "exactly what we need", buy-signal
+                language ("if we do want to go ahead"). EXCLUDE lukewarm
+                politeness: "yeah nice", "brilliant" as filler, "ok cool".
+                Must read as visceral, not polite.
+
+              TIER 2 — Direct feature requests:
+                Explicit "can it do X?", "does it support Y?", "I wish it did Z".
+                EXCLUDE meta/scheduling questions like "are you going to talk
+                about X next?", "will you cover Y?". The ask must be about the
+                product's CAPABILITY, not the conversation's STRUCTURE.
+
+              TIER 3 — Detailed problem explanations:
+                Partner describing pain across multiple sentences, with specifics
+                (systems, constraints, numbers, workarounds). EXCLUDE one-liner
+                problems like "it's time-consuming" — those belong only in the
+                text Key Quotes thread (Step 6), not the video clips. Include
+                at least 1 tier-3 clip per meeting for context.
+
+            How to apply: scan transcript for each tier top-down. If tier 1
+            yields 3 strong clips, that's the set — don't force 5. If tiers 1+2
+            yield 8, use 8. Never pad to hit a count. Skip rambling/low-density
+            quotes even if long.
 
             For each selected quote with timestamp TS (in seconds):
                 timeout 90 ffmpeg -y \
