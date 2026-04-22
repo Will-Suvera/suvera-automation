@@ -14,10 +14,10 @@ name: Daily summary
 
 on:
   schedule:
-    # 16:00 UTC daily = 17:00 BST (UK summer) / 16:00 GMT (UK winter).
-    # Every day including weekends — partner calls occasionally happen on
-    # weekends and Will wants visibility.
-    - cron: '0 16 * * *'
+    # 17:00 UTC daily = 18:00 BST (UK summer) / 17:00 GMT (UK winter).
+    # GitHub Actions cron doesn't handle DST — this is "6pm UK" during BST
+    # (late March → late October). Revisit in winter if you want 18:00 GMT.
+    - cron: '0 17 * * *'
   workflow_dispatch: {}
 
 permissions:

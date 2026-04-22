@@ -24,7 +24,7 @@ When a Fathom recording finishes on Will's or Caitlin's account:
 Two scheduled workflows complement it:
 
 - **Watchdog** (19:30 UTC Mon–Fri) — reconciles Fathom directly against what landed. Catches silent failures.
-- **Daily summary** (16:00 UTC daily = 17:00 BST) — Slack digest ranking today's feature requests + gaps by how often they've been cited in prior meetings. Features-only, no problems section. Silent when no meetings that day.
+- **Daily summary** (17:00 UTC daily = 18:00 BST) — Slack digest ranking today's feature requests + gaps by how often they've been cited in prior meetings. Features-only, no problems section. Silent when no meetings that day.
 
 ---
 
@@ -185,7 +185,7 @@ Pure bash. Queries Fathom Will + Caitlin directly for last-24h external meetings
 
 ## 7. Workflow: daily-summary.yml
 
-Claude Code under subscription. **16:00 UTC daily (17:00 BST)**, every day including weekends.
+Claude Code under subscription. **17:00 UTC daily (18:00 BST)**, every day including weekends.
 
 Reads today's new Notion pages, extracts ONLY feature requests + gaps (drops Live + In-build), cross-references each against the full Partner Meeting Library for frequency counts, ranks them most-cited-first, posts to Slack.
 
