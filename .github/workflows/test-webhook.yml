@@ -88,26 +88,28 @@ jobs:
           grep -q '"recording_id":999999999' /tmp/body || { echo "::error::Response missing our recording_id"; exit 1; }
           echo "before_ts=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: 4. Verify repository_dispatch fired a run with matching payload
+      - name: 4. Verify repository_dispatch fired a new run
         run: |
           set -eu
           BEFORE="${{ steps.signed_post.outputs.before_ts }}"
-          TARGET_RID=999999999
+          # displayTitle for repository_dispatch is "fathom_meeting_ended",
+          # so we can't match on payload. Instead we match on createdAt > BEFORE.
           for i in 1 2 3 4 5 6; do
             sleep 5
-            RUNS=$(gh run list --repo "${{ github.repository }}" --workflow=process-meeting-webhook.yml --event=repository_dispatch --limit 5 --json databaseId,createdAt,status,conclusion,displayTitle)
-            MATCH=$(echo "$RUNS" | jq -r --argjson ts "$BEFORE" --argjson rid "$TARGET_RID" '
-              [.[] | select((.createdAt | fromdateiso8601) >= $ts) | select(.displayTitle | contains(($rid|tostring)))] | .[0].databaseId // empty')
+            RUNS=$(gh run list --repo "${{ github.repository }}" --workflow=process-meeting-webhook.yml --event=repository_dispatch --limit 5 --json databaseId,createdAt)
+            MATCH=$(echo "$RUNS" | jq -r --argjson ts "$BEFORE" '
+              [.[] | select((.createdAt | fromdateiso8601) >= $ts)] | .[0].databaseId // empty')
             if [ -n "$MATCH" ]; then
-              echo "::notice::Dispatched run id=$MATCH"
-              echo "::group::Run details"
-              gh run view --repo "${{ github.repository }}" "$MATCH" --json status,conclusion,displayTitle
-              echo "::endgroup::"
+              echo "::notice::Dispatched run id=$MATCH within $((i*5))s"
+              echo "Cancelling it (synthetic payload would fail Fathom fetch and waste Max quota)"
+              gh run cancel --repo "${{ github.repository }}" "$MATCH" || true
               exit 0
             fi
-            echo "attempt $i: no matching run yet"
+            echo "attempt $i: no new run yet"
           done
-          echo "::error::Did not see a dispatched run for recording_id=$TARGET_RID within 30s"
+          echo "::error::Worker did not fire a repository_dispatch within 30s"
+          echo "Most likely: GITHUB_PAT in Cloudflare lacks Contents:write. Check with:"
+          echo "  curl -X POST -H 'Authorization: Bearer <PAT>' .../dispatches"
           gh run list --repo "${{ github.repository }}" --workflow=process-meeting-webhook.yml --limit 5
           exit 1
 
