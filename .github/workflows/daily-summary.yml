@@ -65,9 +65,14 @@ jobs:
             (or Date property = today if cleaner). Also fetch the full library
             for cross-reference.
 
-            ## Step 2: Silent exit if zero meetings
-            If no Notion pages were created today, post NOTHING and exit 0.
-            Will's rule: "leave blank if none".
+            ## Step 2: Silent exit if zero meetings (STRICT — this is the most
+            ## important rule in this prompt after "only post to C0APW8DSA4R").
+            If zero Notion pages were created today, you MUST post nothing to
+            Slack. Do not post "no meetings today", do not post a heartbeat,
+            do not post an empty digest. Exit the bash session and stop.
+            Will explicitly asked: "if no new recordings, don't post in the
+            Slack bot channel". Only skip this rule if you find ≥1 Notion
+            page with created_time on_or_after today's UTC midnight.
 
             ## Step 3: Extract feature requests + gaps from today's pages
             For each of today's pages, fetch content via GET /v1/blocks/{page_id}/children.

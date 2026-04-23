@@ -91,7 +91,8 @@ jobs:
           done
 
           if [ "$COUNT" -eq 0 ]; then
-            REPORT_LINES="_No external meetings in Fathom in the last 24h._"
+            echo "No external meetings today — exiting silently without posting to Slack."
+            exit 0
           fi
 
           HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥3 mentions)."
