@@ -1,0 +1,19 @@
+name: Probe Ellena Fathom key
+on: { workflow_dispatch: {} }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: |
+          set -eu
+          KEY="2lBQXbsYVXyTv3ADqIOJw.qbNwvPtcsiQOg3ThcFSX2QDPCpvkscDYnCFi3aQVVoA"
+          echo "--- /meetings with Ellena key ---"
+          curl -sS -w "\nHTTP %{http_code}\n" -H "X-Api-Key: $KEY" \
+            "https://api.fathom.ai/external/v1/meetings?limit=1" | head -20
+          echo ""
+          echo "--- POST /webhooks (register) with Ellena key ---"
+          curl -sS -w "\nHTTP %{http_code}\n" -X POST \
+            -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+            -d '{"destination_url":"https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev/","triggered_for":["my_recordings"],"include_transcript":true,"include_summary":true,"include_action_items":true,"include_crm_matches":false}' \
+            "https://api.fathom.ai/external/v1/webhooks" | head -40
