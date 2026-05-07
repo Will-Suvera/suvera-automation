@@ -2,7 +2,7 @@
 
 Full documentation for the hands-free pipeline that turns Fathom partner meetings into Notion analyses + Slack posts + video clips. Everything runs on the Max subscription — **zero API billing**.
 
-> **🚨 Current production blocker (Apr 22 2026):** the Cloudflare Worker's `GITHUB_PAT` needs **Contents: Read AND write** (currently just Read → `POST /dispatches` returns 403). Until that's fixed, Fathom meetings will NOT auto-process. Fix at https://github.com/settings/personal-access-tokens → edit the suvera-automation token → Contents: Read and write. Then `gh workflow run test-webhook.yml` to re-verify.
+> **Status (May 7 2026):** webhook chain healthy (smoke test green). Daily-summary workflow removed — per-meeting Slack posts cover the signal without a redundant rolled-up digest. Worker now mirrors every inbound webhook attempt to Slack `C0APW8DSA4R` for live debugging — see §11 (debug logging).
 
 ---
 
@@ -21,10 +21,11 @@ When a Fathom recording finishes on Will's or Caitlin's account:
    - Posts a threaded reply with 10 key quotes
    - Cuts and uploads ~5–10 video clips to the same thread
 
-Two scheduled workflows complement it:
+One scheduled workflow complements it:
 
-- **Watchdog** (19:30 UTC Mon–Fri) — reconciles Fathom directly against what landed. Catches silent failures.
-- **Daily summary** (17:00 UTC daily = 18:00 BST) — Slack digest ranking today's feature requests + gaps by how often they've been cited in prior meetings. Features-only, no problems section. Silent when no meetings that day.
+- **Watchdog** (19:30 UTC Mon–Fri) — reconciles Fathom directly against what landed. Catches silent failures. Silent on zero-meeting days.
+
+(The daily-summary workflow was removed on 2026-05-07 — per-meeting Slack posts already cover the signal; the rolled-up 6pm digest was redundant.)
 
 ---
 
@@ -72,12 +73,12 @@ Two scheduled workflows complement it:
 Parallel observability:
 
 ```
-  .github/workflows/watchdog.yml      .github/workflows/daily-summary.yml
-  cron: 30 19 * * 1-5 (19:30 UTC)     cron: 30 18 * * 1-5 (18:30 UTC)
-        │                                     │
-  pure-bash reconciliation                Claude Code digest
-  (queries Fathom + counts Planner      (reads today's Notion, cross-
-   mentions, posts to Slack)             refs themes across library)
+  .github/workflows/watchdog.yml          Cloudflare Worker → Slack
+  cron: 30 19 * * 1-5 (19:30 UTC)         live mirror of inbound webhooks
+        │                                       │
+  pure-bash reconciliation               every POST → 1 Slack line:
+  (queries Fathom + counts Planner       :white_check_mark: dispatched / :rotating_light: failed
+   mentions, posts to Slack)             / :warning: rejected (with reason)
 ```
 
 ---
@@ -95,7 +96,7 @@ Two directories under `Platform <> Commercial Sync/automation/`:
                                   Also supports workflow_dispatch for manual
                                   replay (all fields required as inputs).
   watchdog.yml                 ← daily reconciliation (bash only, no Claude).
-  daily-summary.yml            ← weekday digest post (Claude Code).
+                                  Silent on zero-meeting days.
   test-webhook.yml             ← hands-free smoke test of the chain.
 README.md
 ```
@@ -126,6 +127,7 @@ package.json          ← wrangler + types
 | `SLACK_BOT_TOKEN` | GitHub repo Secrets | `xoxb-…` bot token (Partner-insights-bot). Scopes: `chat:write`, `files:write`. **Missing** `files:read`, `channels:history` — affects surgical clip management. |
 | `FATHOM_WEBHOOK_SECRET_WILL` | GitHub repo Secrets **and** Cloudflare | `whsec_…`. GitHub copy used by the smoke test to sign test requests. Cloudflare copy used by the Worker to verify real requests. Must be identical. |
 | `GITHUB_PAT` | Cloudflare Worker (only) | Fine-grained PAT on `suvera-automation`. Permission: **Contents: Read and write** (required for `POST /dispatches`). |
+| `SLACK_BOT_TOKEN` (Cloudflare copy) | Cloudflare Worker | `xoxb-…` — same Slack bot token as in GitHub Secrets. Used by Worker to mirror inbound webhook attempts to `SLACK_DEBUG_CHANNEL`. Optional; if unset, Slack debug logging silently no-ops. |
 
 Lookup/rotate commands:
 
@@ -180,28 +182,6 @@ Pure bash. Queries Fathom Will + Caitlin directly for last-24h external meetings
 **What it answers:** "Did today's qualifying meetings actually land in Slack?"
 
 **When to check:** if the daily 19:30 UTC post in `#partner-meetings` shows meetings you don't remember seeing main-posts for, the main pipeline silently dropped them.
-
----
-
-## 7. Workflow: daily-summary.yml
-
-Claude Code under subscription. **17:00 UTC daily (18:00 BST)**, every day including weekends.
-
-Reads today's new Notion pages, extracts ONLY feature requests + gaps (drops Live + In-build), cross-references each against the full Partner Meeting Library for frequency counts, ranks them most-cited-first, posts to Slack.
-
-**Format:**
-```
-📊 Partner-call feature digest — {date}
-Calls today: N
-
-Feature requests & gaps (most cited → least):
-• *<feature in partner's framing>*
-  cited N× previously   [links to prior pages]
-  _today by: Practice name_
-• …
-```
-
-Silent if 0 meetings today. No problem section — problems are covered in the per-meeting thread.
 
 ---
 
@@ -360,13 +340,13 @@ gh run watch $(gh run list --workflow=watchdog.yml --limit 1 --json databaseId -
 **PASS**: Slack post appears listing 24h external meetings with Planner mention counts, or `_No external meetings…_` if a quiet day.
 **FAIL**: fix in the `fetch_meetings` jq expression — Fathom's schema uses `calendar_invitees_domains_type == "one_or_more_external"`, not `.invitees[]?.is_external`. This bug already bit once.
 
-### 10.4 Does the daily summary workflow work?
-```bash
-gh workflow run daily-summary.yml
-gh run watch $(gh run list --workflow=daily-summary.yml --limit 1 --json databaseId -q '.[0].databaseId')
-```
-**PASS**: either silent (no meetings today) or a single digest post in `#partner-meetings`.
-**FAIL cases:** Claude Code max-turns exhausted (bump); Notion query wrong (check `Notion-Version: 2025-09-03`); cross-ref counts wildly wrong (refine prompt).
+### 10.4 Is Worker debug logging mirroring to Slack?
+After triggering any inbound POST (e.g. `gh workflow run test-webhook.yml`), a single line should appear in `C0APW8DSA4R`:
+- `:white_check_mark: dispatched → GitHub (HTTP 204)` on success
+- `:rotating_light: dispatch FAILED (HTTP 4xx/5xx)` on GitHub-side error
+- `:warning: rejected: <reason>` on Worker-side rejection (bad signature, missing headers, skew)
+
+If nothing appears: confirm `SLACK_BOT_TOKEN` is set as a Cloudflare secret (`npx wrangler secret list`) and `SLACK_DEBUG_CHANNEL` in `wrangler.toml` is non-empty.
 
 ### 10.5 Does Fathom → real production work?
 Ultimate test: have a short Fathom meeting with one external invitee where "Planner" is mentioned 3+ times. End the meeting, wait ~15 min. Expected:
@@ -375,9 +355,10 @@ Ultimate test: have a short Fathom meeting with one external invitee where "Plan
 - Slack thread with 10 quotes + up to 10 clips
 
 If nothing appears within 30 min, check in order:
-1. Cloudflare Worker `npx wrangler tail` — did a webhook arrive?
-2. `gh run list --repo Will-Suvera/suvera-automation --limit 5` — did a `repository_dispatch` fire?
-3. Click into that run — did it exit quietly because of a filter, or fail?
+1. Slack `C0APW8DSA4R` — did the Worker post a `:white_check_mark:`/`:warning:`/`:rotating_light:` line? If silent, Fathom never delivered (check Fathom webhook config).
+2. `npx wrangler tail` — for live trace if Slack mirror is misbehaving.
+3. `gh run list --repo Will-Suvera/suvera-automation --limit 5` — did a `repository_dispatch` fire?
+4. Click into that run — did it exit quietly because of a filter, or fail?
 
 ---
 
