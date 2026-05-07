@@ -79,15 +79,15 @@ jobs:
               "https://api.fathom.ai/external/v1/recordings/${RID}/transcript" \
               | grep -iEo 'planner' | wc -l | tr -d ' ')
 
-            if [ "${PLANNER_N:-0}" -ge 3 ]; then
+            if [ "${PLANNER_N:-0}" -ge 1 ]; then
               MARK="✅ qualifies"
               QUALIFY_COUNT=$((QUALIFY_COUNT + 1))
             else
-              MARK="⚪ below threshold"
+              MARK="⚪ no Planner mention"
               SKIP_COUNT=$((SKIP_COUNT + 1))
             fi
 
-            REPORT_LINES+="• *${TITLE}* (${LABEL}, RID \`${RID}\`) — Planner mentions: ${PLANNER_N} ${MARK}\n  <https://fathom.video/share/${SHARE}|Open in Fathom>\n"
+            REPORT_LINES+="• *${TITLE}* (${LABEL}, RID \`${RID}\`) — Planner mentions: ${PLANNER_N} ${MARK}\n  <${SHARE}|Open in Fathom>\n"
           done
 
           if [ "$COUNT" -eq 0 ]; then
@@ -95,7 +95,7 @@ jobs:
             exit 0
           fi
 
-          HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥3 mentions)."
+          HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥1 mention)."
           FOOTER="👉 Cross-check: every qualifying meeting above should have a corresponding main-post + thread in this channel today. If one is missing, the routine silently skipped it — re-fire with \`gh workflow run process-meetings.yml\` from the suvera-automation repo."
 
           TEXT=$(printf "%s\n\n%s\n%s" "$HEADER" "$REPORT_LINES" "$FOOTER")

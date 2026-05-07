@@ -92,9 +92,10 @@ jobs:
 
             ## Scope filter (check first, bail if not a fit)
             1. Must be external: $INVITEES_DOMAINS == "one_or_more_external". If not, exit quietly.
-            2. Must be about Planner: fetch the transcript (step 1 below) and
-               count case-insensitive "planner" occurrences. If < 3, exit
-               quietly and post NOTHING to Slack.
+            2. Must mention Planner: fetch the transcript (step 1 below) and
+               count case-insensitive "planner" occurrences. If 0, exit
+               quietly and post NOTHING to Slack. (≥1 mention qualifies —
+               we'd rather process a borderline call than miss it.)
 
             ## Credentials
             Use the right Fathom key for the account:
