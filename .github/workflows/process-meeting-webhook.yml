@@ -51,6 +51,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: Run Claude Code pipeline
         uses: anthropics/claude-code-action@v1
         env:
@@ -262,6 +265,101 @@ jobs:
             Also set the top-level "text" field on the chat.postMessage call to
             the practice name (used as Slack notification preview). If the
             Slack post fails non-2xx, log the body and exit non-zero.
+
+            Capture the "ts" from the response (call it $MAIN_TS) — Steps 5
+            and 6 reply in-thread.
+
+            ## Step 5: Thread reply — 10 key quotes
+            POST chat.postMessage to channel C0APW8DSA4R with
+            thread_ts=$MAIN_TS. ONE message containing all 10 quotes grouped
+            by emoji category. Format:
+
+              :red_circle: *Problems*
+              > "{quote 1}" — {Speaker}, <$SHARE_URL?timestamp=SECS|Watch>
+              > "{quote 2}" — {Speaker}, <$SHARE_URL?timestamp=SECS|Watch>
+              > "{quote 3}" — {Speaker}, <$SHARE_URL?timestamp=SECS|Watch>
+
+              :star: *Dream*
+              > "..." — ...
+
+              :fire: *Reaction*
+              > "..." — ...
+
+              :zap: *Powerful*
+              > "..." — ...
+
+            Categories and counts: :red_circle: PROBLEM × 3, :star: DREAM × 3,
+            :fire: REACTION × 2, :zap: POWERFUL × 2 (total = 10). Each quote
+            verbatim from transcript. Watch link timestamp is the speaker's
+            start-of-line in seconds. mrkdwn Slack-link format
+            <URL|label> — do not use markdown [label](URL) — Slack ignores it.
+
+            ## Step 6: Thread video clips (5–10, criteria-driven)
+
+            Probe whether HLS playback is publicly accessible:
+              HEAD: curl -sI "$SHARE_URL/video.m3u8" | head -1
+              GET head bytes: curl -s "$SHARE_URL/video.m3u8" | head -c 10
+
+            If HEAD returns 404/403 OR the body's first 10 chars are not
+            "#EXTM3U", skip ALL clips for this meeting. DO NOT fail the run.
+            Log "video.m3u8 unavailable — skipping clips" and move on. The
+            main post + quote thread already have Watch links.
+
+            Otherwise pick clips under STRICT criteria. Quantity is flexible
+            — typically 5, up to 10 if the material genuinely warrants it.
+            Fewer high-quality clips beat more mediocre ones. Priority order
+            (descend only when higher tiers are exhausted):
+
+              TIER 1 — VERY HIGH explicit praise / buy signal:
+                Audible enthusiasm. "Wow", "this is amazing", "I love that",
+                "exactly what we need", "if we do want to go ahead". EXCLUDE
+                lukewarm politeness: "yeah nice", "brilliant" as filler.
+                Must read as visceral, not polite.
+
+              TIER 2 — Direct feature requests:
+                Explicit "can it do X?", "does it support Y?", "I wish it
+                did Z". EXCLUDE meta/scheduling questions like "will you
+                cover X next?". Capability questions only.
+
+              TIER 3 — Detailed problem explanations:
+                Multi-sentence pain with specifics (systems, constraints,
+                numbers, workarounds). EXCLUDE one-liner gripes — those
+                belong in Step 5's text thread. Include at least 1 tier-3
+                clip per meeting for context.
+
+            Selection ordering rule (from saved feedback): when picking 5
+            clips, lead with praise first (tier 1), then feature requests
+            (tier 2), then problems last (tier 3). Density over volume.
+
+            For each selected quote at timestamp TS (in seconds):
+              timeout 90 ffmpeg -y \
+                -i "$SHARE_URL/video.m3u8" \
+                -ss $((TS-5)) -t 20 \
+                -c:v libx264 -preset ultrafast -crf 28 \
+                -c:a aac -b:a 128k \
+                -movflags +faststart \
+                /tmp/c.mp4
+
+            If /tmp/c.mp4 exists and is >1000 bytes, upload via Slack's
+            3-step external upload:
+              1. POST files.getUploadURLExternal → returns {upload_url, file_id}
+              2. PUT the bytes to upload_url
+              3. POST files.completeUploadExternal with:
+                   channel_id="C0APW8DSA4R",
+                   thread_ts=$MAIN_TS,
+                   initial_comment="$EMOJI _\"$QUOTE\"_ — $SPEAKER",
+                   files=[{ id:file_id, title:"{Speaker} — {tier label}" }]
+              Then `rm -f /tmp/c.mp4` before the next clip.
+
+            Use :one: :two: :three: :four: :five: (and :six:…:ten: if more
+            than 5) emoji prefixes on the clips in narrative (chronological)
+            order — even though selection order was praise-then-features-then-
+            problems, the prefixes follow when each clip occurred in the call.
+
+            Always print the returned file_id to stdout for each upload so it
+            can be looked up later for surgical deletes. Clip failures
+            (ffmpeg timeout, Slack 5xx) must not block subsequent clips and
+            must not fail the run — log and continue.
 
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and
