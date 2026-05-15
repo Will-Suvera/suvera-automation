@@ -1,0 +1,129 @@
+name: Fire backfill for any missed meetings
+
+# One-click catch-up. Sweeps the last 24h of external meetings across
+# all 3 Fathom accounts, cross-references against Notion's Partner
+# Meeting Library, and fires repository_dispatch for each meeting
+# that isn't already there.
+#
+# Trigger paths:
+#   - workflow_dispatch (UI / `gh workflow run`)
+#   - Cloudflare Worker `/backfill?token=...` (bookmark / Slack link)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to fire repository_dispatch
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATA_SOURCE_ID: 8115f0ee-00c8-488a-a05b-57726af0acf4
+      CHANNEL: C0APW8DSA4R
+    steps:
+      - name: Identify gaps and fire dispatches
+        env:
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+
+          fetch_account() {
+            local account=$1 key=$2
+            if [ -z "$key" ]; then
+              echo "[]"
+              return
+            fi
+            curl -sS -H "X-Api-Key: $key" \
+              "https://api.fathom.ai/external/v1/meetings?created_after=$SINCE&include_summary=false" \
+              | jq --arg account "$account" \
+                '[.items[]?
+                  | select(.calendar_invitees_domains_type == "one_or_more_external")
+                  | {account: $account,
+                     rid: (.recording_id|tostring),
+                     title: .title,
+                     share_url: .share_url,
+                     start: .scheduled_start_time}]'
+          }
+
+          ALL=$(jq -n \
+            --argjson w "$(fetch_account will    "$FATHOM_WILL_KEY")" \
+            --argjson c "$(fetch_account caitlin "$FATHOM_CAITLIN_KEY")" \
+            --argjson e "$(fetch_account ellena  "$FATHOM_ELLENA_KEY")" \
+            '$w + $c + $e')
+
+          echo "Fathom returned $(echo "$ALL" | jq 'length') external meetings in last 24h"
+          echo "$ALL" | jq '.'
+
+          # Query Notion for existing Meeting IDs (last 100 entries).
+          NOTION_RESP=$(curl -sS -X POST \
+            -H "Authorization: Bearer $NOTION_TOKEN" \
+            -H "Notion-Version: 2025-09-03" \
+            -H "Content-Type: application/json" \
+            -d '{"page_size":100}' \
+            "https://api.notion.com/v1/data_sources/${DATA_SOURCE_ID}/query")
+
+          SEEN=$(echo "$NOTION_RESP" \
+            | jq '[.results[]
+                   | (.properties["Meeting ID"].rich_text[0].plain_text // "")
+                   | select(length > 0)]')
+
+          MISSING=$(echo "$ALL" \
+            | jq --argjson seen "$SEEN" \
+              '[.[] | select((.rid as $r | $seen | index($r)) | not)]')
+          COUNT=$(echo "$MISSING" | jq 'length')
+
+          echo "Missing from Notion: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$(jq -nc --arg ch "$CHANNEL" \
+                '{channel:$ch, text:":white_check_mark: Manual backfill: no missed meetings in the last 24h — everything is up to date."}')" \
+              https://slack.com/api/chat.postMessage > /dev/null
+            exit 0
+          fi
+
+          # Fire each missing meeting via repository_dispatch.
+          # Identical mechanism to the live Worker → GH path.
+          SUMMARY_LINES=""
+          for i in $(seq 0 $((COUNT - 1))); do
+            ACCOUNT=$(echo "$MISSING" | jq -r ".[$i].account")
+            RID=$(echo "$MISSING"     | jq -r ".[$i].rid")
+            TITLE=$(echo "$MISSING"   | jq -r ".[$i].title")
+            SHARE=$(echo "$MISSING"   | jq -r ".[$i].share_url")
+            START=$(echo "$MISSING"   | jq -r ".[$i].start")
+
+            echo "→ Firing $ACCOUNT / $RID — $TITLE"
+            gh api "repos/${GITHUB_REPOSITORY}/dispatches" \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -f event_type=fathom_meeting_ended \
+              -F "client_payload[account]=$ACCOUNT" \
+              -F "client_payload[recording_id]=$RID" \
+              -F "client_payload[title]=$TITLE" \
+              -F "client_payload[share_url]=$SHARE" \
+              -F "client_payload[scheduled_start_time]=$START" \
+              -F "client_payload[calendar_invitees_domains_type]=one_or_more_external"
+
+            SUMMARY_LINES+="• ${TITLE} (${ACCOUNT}, RID \`${RID}\`)\n"
+            sleep 4
+          done
+
+          MSG=":zap: *Manual backfill* — fired ${COUNT} missed meetings. They'll appear in this channel over the next ~15 min.\n${SUMMARY_LINES}"
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$(jq -nc --arg ch "$CHANNEL" --arg msg "$MSG" '{channel:$ch, text:$msg}')" \
+            https://slack.com/api/chat.postMessage > /dev/null
