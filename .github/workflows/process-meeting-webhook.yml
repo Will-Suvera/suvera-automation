@@ -184,30 +184,84 @@ jobs:
             "Authorization: Bearer $SLACK_BOT_TOKEN" and
             "Content-Type: application/json; charset=utf-8".
 
-            Distil a 3-to-5-sentence plain-prose summary from your analysis.
-            Cover: who attended (practice + lead person + role), what they
-            currently use, their headline problem, and the opportunity signal
-            in one or two final sentences. No emoji-bullet lists, no quote
-            blocks, no field grids. Just a clear paragraph someone can skim
-            in 15 seconds.
+            Use EXACTLY this block layout (8 blocks, in order). All
+            section text is mrkdwn. Don't add a thread reply. Don't upload
+            video clips. Don't run ffmpeg. Don't probe $SHARE_URL/video.m3u8.
 
-            Blocks (exactly these three, in order):
-              1. header — practice name (plain text, no emoji)
-              2. section — the 3-5 sentence summary as a single mrkdwn block
-              3. actions — two buttons:
-                   { type: "button", text: { type:"plain_text", text:"Open in Notion" },
-                     url: "$NOTION_URL", style: "primary" }
-                   { type: "button", text: { type:"plain_text", text:"Watch on Fathom" },
-                     url: "$SHARE_URL" }
+            Signal colour key (use the right circle emoji for the signal):
+              :large_green_circle: High   |   :large_yellow_circle: Medium   |   :red_circle: Low
 
-            That is the ENTIRE Slack output. Do not post a thread reply.
-            Do not upload video clips. Do not run ffmpeg. Do not probe
-            $SHARE_URL/video.m3u8. The Notion page (Step 3) holds the full
-            analysis — Slack just links to it.
+            Feature urgency colour key (separate from signal):
+              :red_circle: High urgency | :large_yellow_circle: Medium | :large_green_circle: Low
 
-            If the Slack post fails non-2xx, log the body and exit non-zero
-            (the Notion page is already written, so re-firing won't duplicate
-            it — but re-firing is your call, not the workflow's).
+            Source label: account=will → "Will's Fathom"
+                          account=caitlin → "Caitlin's Fathom"
+                          account=ellena  → "Ellena's Fathom"
+
+            Block 1 — header
+              type: "header"
+              text: ":hospital: {Practice} — {Lead Person} ({Their Role})"
+              (Slack header blocks don't render emoji shortcodes; if you want
+              the hospital glyph in the header, use the literal 🏥 character
+              in the plain_text. For body blocks below, keep :emoji: shortcodes.)
+
+            Block 2 — section with 4 fields
+              type: "section"
+              fields: [
+                { type:"mrkdwn", text:"*Practice*\n{Practice (Region)}" },
+                { type:"mrkdwn", text:"*Date*\n{e.g. 21 April 2026 — human-readable}" },
+                { type:"mrkdwn", text:"*Signal*\n{circle emoji} {High|Medium|Low}" },
+                { type:"mrkdwn", text:"*Themes*\n{Theme1 · Theme2 · Theme3}" }
+              ]
+
+            Block 3 — section, attendees + source
+              type: "section"
+              text: { type:"mrkdwn",
+                text:"*Attendees:* {Names with roles in parens} | *Source:* {Source label}" }
+
+            Block 4 — section, one-line practice profile
+              type: "section"
+              text: { type:"mrkdwn",
+                text:"{patient count} patients · {contract count} contracts · {clinical system note, e.g. ~90% SystmOne region (Norfolk & Waveney + all Suffolk)}" }
+              If a fact is genuinely unknown from the transcript, omit it —
+              don't say "unknown". Keep this to ONE line, dot-separated.
+
+            Block 5 — section, Key Takeaways
+              type: "section"
+              text: { type:"mrkdwn", text:"*Key Takeaways*\n1. {takeaway one}\n2. {takeaway two}\n3. {takeaway three}" }
+              Three numbered takeaways. Each 1-2 sentences. Focus on
+              signal-relevance (why this prospect matters, not generic facts).
+
+            Block 6 — section, Dream Solution (2 verbatim quotes)
+              type: "section"
+              text: { type:"mrkdwn",
+                text:":speech_balloon: *Dream Solution*\n> \"{verbatim quote 1}\"\n> \"{verbatim quote 2}\"" }
+              Quotes must be verbatim from transcript. Quote-block markdown
+              (`> `) per line. No attribution needed inside this block.
+
+            Block 7 — section, Ideal Features (5 bullets)
+              type: "section"
+              text: { type:"mrkdwn",
+                text:"*Ideal Features*\n• {urgency-emoji} {Feature name} — {High|Medium|Low} | {Live|In build|Roadmap|Gap}\n• ..." }
+              Exactly 5 bullets. Order by urgency emoji (red first, then yellow,
+              then green). Optional parenthetical detail after the feature name
+              when it sharpens meaning (e.g. "PSA 6m, re-recall 3m post-med change").
+
+            Block 8 — actions, two buttons
+              type: "actions"
+              elements: [
+                { type:"button",
+                  text:{ type:"plain_text", text:"Open in Notion" },
+                  url:"$NOTION_URL",
+                  style:"primary" },
+                { type:"button",
+                  text:{ type:"plain_text", text:"Watch on Fathom" },
+                  url:"$SHARE_URL" }
+              ]
+
+            Also set the top-level "text" field on the chat.postMessage call to
+            the practice name (used as Slack notification preview). If the
+            Slack post fails non-2xx, log the body and exit non-zero.
 
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and
