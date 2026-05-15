@@ -1,13 +1,15 @@
 name: Fire backfill for any missed meetings
 
-# One-click catch-up. Sweeps the last 24h of external meetings across
-# all 3 Fathom accounts, cross-references against Notion's Partner
-# Meeting Library, and fires repository_dispatch for each meeting
-# that isn't already there.
+# One-click catch-up. Sweeps the most recent external meetings across
+# all 3 Fathom accounts (up to 50 per account ≈ several months of
+# history per seat), cross-references against Notion's Partner Meeting
+# Library, and fires repository_dispatch for each meeting that isn't
+# already there. Notion dedup makes this safe to run as often as you
+# like — already-processed meetings are skipped.
 #
 # Trigger paths:
 #   - workflow_dispatch (UI / `gh workflow run`)
-#   - Cloudflare Worker `/backfill?token=...` (bookmark / Slack link)
+#   - Cloudflare Worker `/backfill?token=...` (bookmark / Slack button)
 
 on:
   workflow_dispatch: {}
@@ -36,8 +38,10 @@ jobs:
         run: |
           set -eu
 
-          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-
+          # No created_after filter — pull the most recent 50 external
+          # meetings per account (Fathom returns newest first). Notion
+          # dedup catches anything already processed, so the actual
+          # work scales with the *gap*, not the window size.
           fetch_account() {
             local account=$1 key=$2
             if [ -z "$key" ]; then
@@ -45,7 +49,7 @@ jobs:
               return
             fi
             curl -sS -H "X-Api-Key: $key" \
-              "https://api.fathom.ai/external/v1/meetings?created_after=$SINCE&include_summary=false" \
+              "https://api.fathom.ai/external/v1/meetings?limit=50&include_summary=false" \
               | jq --arg account "$account" \
                 '[.items[]?
                   | select(.calendar_invitees_domains_type == "one_or_more_external")
@@ -62,21 +66,43 @@ jobs:
             --argjson e "$(fetch_account ellena  "$FATHOM_ELLENA_KEY")" \
             '$w + $c + $e')
 
-          echo "Fathom returned $(echo "$ALL" | jq 'length') external meetings in last 24h"
+          echo "Fathom returned $(echo "$ALL" | jq 'length') external meetings across all 3 accounts"
           echo "$ALL" | jq '.'
 
-          # Query Notion for existing Meeting IDs (last 100 entries).
-          NOTION_RESP=$(curl -sS -X POST \
-            -H "Authorization: Bearer $NOTION_TOKEN" \
-            -H "Notion-Version: 2025-09-03" \
-            -H "Content-Type: application/json" \
-            -d '{"page_size":100}' \
-            "https://api.notion.com/v1/data_sources/${DATA_SOURCE_ID}/query")
+          # Paginate Notion to collect every Meeting ID currently in the
+          # data source. Notion's page_size max is 100; we read up to 5
+          # pages = 500 entries, plenty for any realistic backlog.
+          SEEN="[]"
+          CURSOR=""
+          for page in 1 2 3 4 5; do
+            if [ -z "$CURSOR" ]; then
+              BODY='{"page_size":100}'
+            else
+              BODY=$(jq -nc --arg c "$CURSOR" '{page_size:100, start_cursor:$c}')
+            fi
+            NOTION_RESP=$(curl -sS -X POST \
+              -H "Authorization: Bearer $NOTION_TOKEN" \
+              -H "Notion-Version: 2025-09-03" \
+              -H "Content-Type: application/json" \
+              -d "$BODY" \
+              "https://api.notion.com/v1/data_sources/${DATA_SOURCE_ID}/query")
 
-          SEEN=$(echo "$NOTION_RESP" \
-            | jq '[.results[]
-                   | (.properties["Meeting ID"].rich_text[0].plain_text // "")
-                   | select(length > 0)]')
+            PAGE_IDS=$(echo "$NOTION_RESP" \
+              | jq '[.results[]
+                     | (.properties["Meeting ID"].rich_text[0].plain_text // "")
+                     | select(length > 0)]')
+            SEEN=$(jq -n --argjson a "$SEEN" --argjson b "$PAGE_IDS" '$a + $b')
+
+            HAS_MORE=$(echo "$NOTION_RESP" | jq -r '.has_more // false')
+            if [ "$HAS_MORE" != "true" ]; then
+              break
+            fi
+            CURSOR=$(echo "$NOTION_RESP" | jq -r '.next_cursor // ""')
+            if [ -z "$CURSOR" ]; then
+              break
+            fi
+          done
+          echo "Notion data source has $(echo "$SEEN" | jq 'length') Meeting IDs recorded"
 
           MISSING=$(echo "$ALL" \
             | jq --argjson seen "$SEEN" \
@@ -90,7 +116,7 @@ jobs:
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-Type: application/json; charset=utf-8" \
               -d "$(jq -nc --arg ch "$CHANNEL" \
-                '{channel:$ch, text:":white_check_mark: Manual backfill: no missed meetings in the last 24h — everything is up to date."}')" \
+                '{channel:$ch, text:":white_check_mark: Manual backfill: nothing to do — every recent Fathom meeting is already in Notion."}')" \
               https://slack.com/api/chat.postMessage > /dev/null
             exit 0
           fi
