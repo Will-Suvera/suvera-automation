@@ -72,7 +72,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Grep,Glob
-            --max-turns 80
+            --max-turns 120
           prompt: |
             You are processing ONE specific Fathom meeting that just ended. All
             metadata is in environment variables. Do NOT poll Fathom for other
@@ -294,16 +294,26 @@ jobs:
             start-of-line in seconds. mrkdwn Slack-link format
             <URL|label> — do not use markdown [label](URL) — Slack ignores it.
 
-            ## Step 6: Thread video clips (5–10, criteria-driven)
+            ## Step 6: Thread video clips (REQUIRED — 5 to 10 clips)
 
-            Probe whether HLS playback is publicly accessible:
-              HEAD: curl -sI "$SHARE_URL/video.m3u8" | head -1
-              GET head bytes: curl -s "$SHARE_URL/video.m3u8" | head -c 10
+            **This step is mandatory.** Do not finish the run without
+            attempting clip uploads. The user has explicitly asked for
+            video clips and the quote-only thread without them is
+            considered a failure.
 
-            If HEAD returns 404/403 OR the body's first 10 chars are not
-            "#EXTM3U", skip ALL clips for this meeting. DO NOT fail the run.
-            Log "video.m3u8 unavailable — skipping clips" and move on. The
-            main post + quote thread already have Watch links.
+            ### 6a. Probe HLS availability (one line of diagnostic
+            output is required — print the actual result):
+              echo "HEAD probe:"  ; curl -sI "$SHARE_URL/video.m3u8" | head -1
+              echo "BODY probe:"  ; curl -s  "$SHARE_URL/video.m3u8" | head -c 10 ; echo
+
+            Skip clips ONLY IF the HEAD response status is 4xx OR the
+            body's first 10 characters are not "#EXTM3U". Most Fathom
+            share links return 200 + "#EXTM3U" — assume the probe will
+            pass unless you see clear evidence otherwise.
+
+            If you skip, post a thread reply to $MAIN_TS that explicitly
+            says "_Video clips skipped — HLS endpoint returned HTTP {status}_".
+            Do not silently omit clips.
 
             Otherwise pick clips under STRICT criteria. Quantity is flexible
             — typically 5, up to 10 if the material genuinely warrants it.
@@ -357,9 +367,19 @@ jobs:
             problems, the prefixes follow when each clip occurred in the call.
 
             Always print the returned file_id to stdout for each upload so it
-            can be looked up later for surgical deletes. Clip failures
-            (ffmpeg timeout, Slack 5xx) must not block subsequent clips and
-            must not fail the run — log and continue.
+            can be looked up later for surgical deletes. Individual clip
+            failures (one ffmpeg timeout, one Slack 5xx) must not block
+            subsequent clips. But if you upload ZERO clips when the probe
+            passed, that's a hard failure — post `:rotating_light: Wellington
+            Road clip-upload step produced 0 clips despite HLS being reachable`
+            (template the practice name) to $MAIN_TS as a thread reply so
+            the gap is visible.
+
+            ### 6c. Final summary line (REQUIRED)
+            Before the action exits, print exactly this line to stdout:
+              CLIP_SUMMARY: uploaded=N, probe_status=<HEAD status code or "ok">
+            This makes clip outcomes visible in the GitHub Actions log
+            even though individual Bash tool calls aren't surfaced.
 
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and
