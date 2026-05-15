@@ -294,94 +294,206 @@ jobs:
             start-of-line in seconds. mrkdwn Slack-link format
             <URL|label> — do not use markdown [label](URL) — Slack ignores it.
 
-            ## Step 6: Thread video clips (REQUIRED — 5 to 10 clips)
+            ## Step 6: Write clips manifest (do NOT run ffmpeg or upload)
 
-            **This step is mandatory.** Do not finish the run without
-            attempting clip uploads. The user has explicitly asked for
-            video clips and the quote-only thread without them is
-            considered a failure.
+            You only need to SELECT the clips and write them to
+            /tmp/clips.json. A deterministic bash step after this one
+            does the ffmpeg cuts and Slack uploads — that step is far
+            more reliable than asking you to orchestrate dozens of
+            curl/ffmpeg invocations.
 
-            ### 6a. Probe HLS availability (one line of diagnostic
-            output is required — print the actual result):
-              echo "HEAD probe:"  ; curl -sI "$SHARE_URL/video.m3u8" | head -1
-              echo "BODY probe:"  ; curl -s  "$SHARE_URL/video.m3u8" | head -c 10 ; echo
+            Pick 5 to 10 clips under STRICT tier criteria. Quantity is
+            flexible — fewer high-quality clips beat more mediocre ones.
+            At least 5, no more than 10. Priority order:
 
-            Skip clips ONLY IF the HEAD response status is 4xx OR the
-            body's first 10 characters are not "#EXTM3U". Most Fathom
-            share links return 200 + "#EXTM3U" — assume the probe will
-            pass unless you see clear evidence otherwise.
+              TIER 1 — praise: VERY HIGH explicit enthusiasm. "Wow",
+                "this is amazing", "I love that", "exactly what we
+                need", "if we do want to go ahead". EXCLUDE lukewarm
+                politeness ("yeah nice", filler "brilliant"). Must
+                read as visceral, not polite.
 
-            If you skip, post a thread reply to $MAIN_TS that explicitly
-            says "_Video clips skipped — HLS endpoint returned HTTP {status}_".
-            Do not silently omit clips.
+              TIER 2 — feature: Direct capability requests. "Can it
+                do X?", "does it support Y?", "I wish it did Z".
+                EXCLUDE meta/scheduling questions ("will you cover
+                X next?"). Product capability only.
 
-            Otherwise pick clips under STRICT criteria. Quantity is flexible
-            — typically 5, up to 10 if the material genuinely warrants it.
-            Fewer high-quality clips beat more mediocre ones. Priority order
-            (descend only when higher tiers are exhausted):
+              TIER 3 — problem: Multi-sentence pain with specifics
+                (systems, constraints, numbers, workarounds). EXCLUDE
+                one-liner gripes. Include at least 1 tier-3 clip.
 
-              TIER 1 — VERY HIGH explicit praise / buy signal:
-                Audible enthusiasm. "Wow", "this is amazing", "I love that",
-                "exactly what we need", "if we do want to go ahead". EXCLUDE
-                lukewarm politeness: "yeah nice", "brilliant" as filler.
-                Must read as visceral, not polite.
+            Selection ordering rule (from saved feedback): praise
+            first, then features, then problems. Density over volume.
 
-              TIER 2 — Direct feature requests:
-                Explicit "can it do X?", "does it support Y?", "I wish it
-                did Z". EXCLUDE meta/scheduling questions like "will you
-                cover X next?". Capability questions only.
+            Write the manifest to /tmp/clips.json with this exact schema
+            (no comments, valid JSON only):
+              {
+                "main_ts": "<the ts captured from Step 4>",
+                "share_url": "$SHARE_URL",
+                "practice": "<practice name, no region>",
+                "clips": [
+                  { "ts": 65, "speaker": "Dr Smith",
+                    "quote": "verbatim quote text",
+                    "emoji": ":one:", "tier": "praise" },
+                  { "ts": 312, "speaker": "...",
+                    "quote": "...",
+                    "emoji": ":two:", "tier": "feature" }
+                ]
+              }
 
-              TIER 3 — Detailed problem explanations:
-                Multi-sentence pain with specifics (systems, constraints,
-                numbers, workarounds). EXCLUDE one-liner gripes — those
-                belong in Step 5's text thread. Include at least 1 tier-3
-                clip per meeting for context.
+            Field rules:
+              - ts: integer seconds (convert from HH:MM:SS).
+              - quote: verbatim from transcript. Single line. Strip any
+                newlines. Slack will render it italicised inside the
+                upload's initial_comment.
+              - emoji: :one: :two: :three: :four: :five: (and
+                :six:…:ten: if more than 5). Order by where the moment
+                occurs in the recording (chronological), even though
+                you selected them in praise→feature→problem order.
+              - tier: "praise" | "feature" | "problem".
 
-            Selection ordering rule (from saved feedback): when picking 5
-            clips, lead with praise first (tier 1), then feature requests
-            (tier 2), then problems last (tier 3). Density over volume.
+            After writing the file, print exactly:
+              MANIFEST_WRITTEN: <n> clips → /tmp/clips.json
 
-            For each selected quote at timestamp TS (in seconds):
-              timeout 90 ffmpeg -y \
-                -i "$SHARE_URL/video.m3u8" \
-                -ss $((TS-5)) -t 20 \
-                -c:v libx264 -preset ultrafast -crf 28 \
-                -c:a aac -b:a 128k \
-                -movflags +faststart \
-                /tmp/c.mp4
-
-            If /tmp/c.mp4 exists and is >1000 bytes, upload via Slack's
-            3-step external upload:
-              1. POST files.getUploadURLExternal → returns {upload_url, file_id}
-              2. PUT the bytes to upload_url
-              3. POST files.completeUploadExternal with:
-                   channel_id="C0APW8DSA4R",
-                   thread_ts=$MAIN_TS,
-                   initial_comment="$EMOJI _\"$QUOTE\"_ — $SPEAKER",
-                   files=[{ id:file_id, title:"{Speaker} — {tier label}" }]
-              Then `rm -f /tmp/c.mp4` before the next clip.
-
-            Use :one: :two: :three: :four: :five: (and :six:…:ten: if more
-            than 5) emoji prefixes on the clips in narrative (chronological)
-            order — even though selection order was praise-then-features-then-
-            problems, the prefixes follow when each clip occurred in the call.
-
-            Always print the returned file_id to stdout for each upload so it
-            can be looked up later for surgical deletes. Individual clip
-            failures (one ffmpeg timeout, one Slack 5xx) must not block
-            subsequent clips. But if you upload ZERO clips when the probe
-            passed, that's a hard failure — post `:rotating_light: Wellington
-            Road clip-upload step produced 0 clips despite HLS being reachable`
-            (template the practice name) to $MAIN_TS as a thread reply so
-            the gap is visible.
-
-            ### 6c. Final summary line (REQUIRED)
-            Before the action exits, print exactly this line to stdout:
-              CLIP_SUMMARY: uploaded=N, probe_status=<HEAD status code or "ok">
-            This makes clip outcomes visible in the GitHub Actions log
-            even though individual Bash tool calls aren't surfaced.
+            That's your only Step 6 deliverable. Do NOT run ffmpeg.
+            Do NOT call Slack files.* APIs. Do NOT probe video.m3u8.
+            The next workflow step handles all of that.
 
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and
             PCNs. Partners are GP Practices and PCNs. Internal meetings and
             non-Planner product lines are out of scope.
+
+      - name: Upload video clips from manifest
+        if: success()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -eu
+
+          MANIFEST=/tmp/clips.json
+          CHANNEL="C0APW8DSA4R"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "CLIP_SUMMARY: no /tmp/clips.json from Claude — skipping clip upload"
+            exit 0
+          fi
+
+          MAIN_TS=$(jq -r '.main_ts // empty' "$MANIFEST")
+          SHARE_URL=$(jq -r '.share_url // empty' "$MANIFEST")
+          PRACTICE=$(jq -r '.practice // "this meeting"' "$MANIFEST")
+          N=$(jq '.clips | length' "$MANIFEST")
+
+          if [ -z "$MAIN_TS" ] || [ -z "$SHARE_URL" ]; then
+            echo "::error::manifest missing main_ts or share_url"
+            cat "$MANIFEST"
+            exit 1
+          fi
+
+          if [ "$N" -lt 1 ]; then
+            echo "CLIP_SUMMARY: clips.json had 0 clips — skipping upload"
+            exit 0
+          fi
+
+          echo "Probing HLS at ${SHARE_URL}/video.m3u8 …"
+          HEAD_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -I "${SHARE_URL}/video.m3u8")
+          BODY_HEAD=$(curl -s "${SHARE_URL}/video.m3u8" | head -c 7)
+          echo "HEAD=${HEAD_STATUS}  BODY=${BODY_HEAD}"
+
+          if [ "$HEAD_STATUS" != "200" ] || [ "${BODY_HEAD:0:7}" != "#EXTM3U" ]; then
+            echo "HLS unavailable — posting skip notice to thread"
+            SKIP_BODY=$(jq -nc \
+              --arg ch "$CHANNEL" --arg ts "$MAIN_TS" \
+              --arg text "_Video clips unavailable — HLS endpoint returned HTTP ${HEAD_STATUS}_" \
+              '{channel:$ch, thread_ts:$ts, text:$text}')
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$SKIP_BODY" \
+              https://slack.com/api/chat.postMessage > /dev/null
+            echo "CLIP_SUMMARY: uploaded=0, probe_status=${HEAD_STATUS}"
+            exit 0
+          fi
+
+          UPLOADED=0
+          for i in $(seq 0 $((N - 1))); do
+            TS=$(jq -r ".clips[$i].ts"      "$MANIFEST")
+            SPEAKER=$(jq -r ".clips[$i].speaker" "$MANIFEST")
+            QUOTE=$(jq -r ".clips[$i].quote"   "$MANIFEST")
+            EMOJI=$(jq -r ".clips[$i].emoji"   "$MANIFEST")
+            TIER=$(jq -r ".clips[$i].tier"     "$MANIFEST")
+
+            START=$((TS - 5))
+            [ $START -lt 0 ] && START=0
+
+            echo "→ Clip $((i + 1))/${N}: ${SPEAKER} @ ${TS}s (${TIER})"
+
+            rm -f /tmp/c.mp4
+            if ! timeout 90 ffmpeg -y -hide_banner -loglevel error \
+              -i "${SHARE_URL}/video.m3u8" \
+              -ss "$START" -t 20 \
+              -c:v libx264 -preset ultrafast -crf 28 \
+              -c:a aac -b:a 128k \
+              -movflags +faststart /tmp/c.mp4; then
+              echo "  ffmpeg failed — skipping"
+              continue
+            fi
+
+            SIZE=$(stat -c %s /tmp/c.mp4 2>/dev/null || echo 0)
+            if [ "$SIZE" -lt 1000 ]; then
+              echo "  clip too small (${SIZE} bytes) — skipping"
+              continue
+            fi
+
+            UL_RESP=$(curl -sS \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -F "filename=clip_$((i + 1)).mp4" \
+              -F "length=${SIZE}" \
+              "https://slack.com/api/files.getUploadURLExternal")
+            UPLOAD_URL=$(echo "$UL_RESP" | jq -r '.upload_url // empty')
+            FILE_ID=$(echo "$UL_RESP" | jq -r '.file_id // empty')
+
+            if [ -z "$UPLOAD_URL" ] || [ -z "$FILE_ID" ]; then
+              echo "  getUploadURLExternal failed: $UL_RESP"
+              continue
+            fi
+
+            curl -sS --data-binary @/tmp/c.mp4 "$UPLOAD_URL" > /dev/null
+
+            COMMENT="${EMOJI} _\"${QUOTE}\"_ — ${SPEAKER}"
+            TITLE="${SPEAKER} — ${TIER}"
+            COMPLETE_BODY=$(jq -nc \
+              --arg ch "$CHANNEL" --arg ts "$MAIN_TS" \
+              --arg fid "$FILE_ID" --arg title "$TITLE" \
+              --arg comment "$COMMENT" \
+              '{channel_id:$ch, thread_ts:$ts, initial_comment:$comment,
+                files:[{id:$fid, title:$title}]}')
+
+            COMPLETE_RESP=$(curl -sS -X POST \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$COMPLETE_BODY" \
+              https://slack.com/api/files.completeUploadExternal)
+            OK=$(echo "$COMPLETE_RESP" | jq -r '.ok')
+            if [ "$OK" = "true" ]; then
+              UPLOADED=$((UPLOADED + 1))
+              echo "  uploaded file_id=${FILE_ID}"
+            else
+              echo "  completeUploadExternal failed: $COMPLETE_RESP"
+            fi
+
+            rm -f /tmp/c.mp4
+          done
+
+          echo "CLIP_SUMMARY: uploaded=${UPLOADED} of ${N}, probe_status=200"
+
+          if [ "$UPLOADED" -eq 0 ]; then
+            ALERT_BODY=$(jq -nc \
+              --arg ch "$CHANNEL" --arg ts "$MAIN_TS" \
+              --arg text ":rotating_light: ${PRACTICE} clip-upload step produced 0 clips despite HLS being reachable." \
+              '{channel:$ch, thread_ts:$ts, text:$text}')
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$ALERT_BODY" \
+              https://slack.com/api/chat.postMessage > /dev/null
+          fi
