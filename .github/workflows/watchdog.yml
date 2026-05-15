@@ -31,11 +31,12 @@ jobs:
         env:
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           set -eu
 
-          for v in FATHOM_WILL_KEY FATHOM_CAITLIN_KEY SLACK_BOT_TOKEN; do
+          for v in FATHOM_WILL_KEY FATHOM_CAITLIN_KEY FATHOM_ELLENA_KEY SLACK_BOT_TOKEN; do
             if [ -z "${!v:-}" ]; then
               echo "::error::Missing secret: $v"
               exit 1
@@ -56,7 +57,8 @@ jobs:
 
           WILL=$(fetch_meetings "Will" "${FATHOM_WILL_KEY}")
           CAITLIN=$(fetch_meetings "Caitlin" "${FATHOM_CAITLIN_KEY}")
-          ALL=$(jq -n --argjson a "$WILL" --argjson b "$CAITLIN" '$a + $b')
+          ELLENA=$(fetch_meetings "Ellena" "${FATHOM_ELLENA_KEY}")
+          ALL=$(jq -n --argjson a "$WILL" --argjson b "$CAITLIN" --argjson c "$ELLENA" '$a + $b + $c')
 
           echo "--- external meetings in last 24h ---"
           echo "$ALL" | jq '.'
@@ -73,7 +75,11 @@ jobs:
             LABEL=$(echo "$ALL"   | jq -r ".[$i].label")
             SHARE=$(echo "$ALL"   | jq -r ".[$i].share_url")
 
-            if [ "$LABEL" = "Will" ]; then KEY="${FATHOM_WILL_KEY}"; else KEY="${FATHOM_CAITLIN_KEY}"; fi
+            case "$LABEL" in
+              Will)    KEY="${FATHOM_WILL_KEY}" ;;
+              Caitlin) KEY="${FATHOM_CAITLIN_KEY}" ;;
+              Ellena)  KEY="${FATHOM_ELLENA_KEY}" ;;
+            esac
 
             PLANNER_N=$(curl -sS -H "X-Api-Key: ${KEY}" \
               "https://api.fathom.ai/external/v1/recordings/${RID}/transcript" \
@@ -95,7 +101,7 @@ jobs:
             exit 0
           fi
 
-          HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥1 mention)."
+          HEADER="🦮 *Daily watchdog* — ${TODAY}\nFathom (Will + Caitlin + Ellena) returned *${COUNT}* external meetings in the last 24h. *${QUALIFY_COUNT}* qualify for the Planner pipeline (≥1 mention)."
           FOOTER="👉 Cross-check: every qualifying meeting above should have a corresponding main-post + thread in this channel today. If one is missing, the routine silently skipped it — re-fire with \`gh workflow run process-meetings.yml\` from the suvera-automation repo."
 
           TEXT=$(printf "%s\n\n%s\n%s" "$HEADER" "$REPORT_LINES" "$FOOTER")

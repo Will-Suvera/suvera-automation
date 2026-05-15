@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       account:
-        description: "will | caitlin"
+        description: "will | caitlin | ellena"
         required: true
         default: "will"
       recording_id:
@@ -65,6 +65,7 @@ jobs:
           INVITEES_DOMAINS: ${{ github.event.client_payload.calendar_invitees_domains_type || github.event.inputs.calendar_invitees_domains_type }}
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         with:
@@ -82,7 +83,7 @@ jobs:
 
             ## Inputs (from env)
             - $RID — recording_id
-            - $ACCOUNT — "will" or "caitlin" (which Fathom account owns it)
+            - $ACCOUNT — "will", "caitlin", or "ellena" (which Fathom account owns it)
             - $TITLE — meeting title
             - $SHARE_URL — Full Fathom share URL (e.g. https://fathom.video/share/SLUG).
               Watch links: append "?timestamp=SECS". m3u8 probe: append "/video.m3u8".
@@ -99,8 +100,9 @@ jobs:
 
             ## Credentials
             Use the right Fathom key for the account:
-              - account=will   → $FATHOM_WILL_KEY
+              - account=will    → $FATHOM_WILL_KEY
               - account=caitlin → $FATHOM_CAITLIN_KEY
+              - account=ellena  → $FATHOM_ELLENA_KEY
 
             Slack token: $SLACK_BOT_TOKEN. Channel: C0APW8DSA4R only.
             Notion integration token: $NOTION_TOKEN. Use Notion REST API
