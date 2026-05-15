@@ -51,9 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-
       - name: Run Claude Code pipeline
         uses: anthropics/claude-code-action@v1
         env:
@@ -115,8 +112,6 @@ jobs:
               8115f0ee-00c8-488a-a05b-57726af0acf4
             (In the 2025-09-03 API this is a "data_source", not a
             "database". See Step 3 for the correct parent shape.)
-            Master Synthesis page id:
-              33135d37-7c69-81fd-9d3c-cac9340ebc2f
 
             ## Step 1: Transcript
             curl -s -H "X-Api-Key: $KEY" \
@@ -141,7 +136,22 @@ jobs:
             - Product Implications — 5 to 8 actionable bullets.
             - 14 Discovery Questions — 2-3 sentences each.
 
-            ## Step 3: Notion page (REST API)
+            ## Step 3: Notion page (REST API) — with dedup
+
+            ### 3a. Check for existing entry first
+            POST https://api.notion.com/v1/data_sources/8115f0ee-00c8-488a-a05b-57726af0acf4/query
+            body: { "filter": { "property": "Meeting ID", "rich_text": { "equals": "$RID" } } }
+
+            If results array is non-empty:
+              - Set $NOTION_URL = results[0].url
+              - Set $NOTION_PAGE_ID = results[0].id
+              - Skip 3b entirely (do NOT create a duplicate page)
+              - Log "Notion page already exists for RID=$RID — reusing URL"
+              - Jump to Step 4 (still post the new-format Slack message)
+
+            If results array is empty, continue to 3b.
+
+            ### 3b. Create the page
             POST https://api.notion.com/v1/pages
             Parent: { "type":"data_source_id", "data_source_id":"8115f0ee-00c8-488a-a05b-57726af0acf4" }
             Icon: { "type":"emoji", "emoji":"🏥" }
@@ -165,103 +175,39 @@ jobs:
             paragraph for prose). Convert quote Watch links to inline links via
             the rich_text "link" field.
 
-            Capture the returned page id + url.
+            Capture the returned page id + url ($NOTION_URL below).
 
-            ## Step 4: Master Synthesis update
-            Prepend a new chronological entry to page id
-            33135d37-7c69-81fd-9d3c-cac9340ebc2f, BEFORE the first existing ###
-            heading below "## Chronological Feed". Format:
-              ### {YYYY-MM-DD} — {Practice} ({Person})
-              **Attendees**: ... | **Signal**: {emoji} {High/Medium/Low}
-              {one-paragraph summary with 2-3 italic direct quotes}
-              [View full analysis]({notion_page_url}) | [Watch recording]($SHARE_URL)
-
-            Use Notion REST API:
-              1. GET /v1/blocks/{page_id}/children to find the first ### after "Chronological Feed"
-              2. PATCH /v1/blocks/{page_id}/children with "after": "<id-of-Chronological-Feed-heading>"
-                 to insert the new blocks above the previous first entry.
-
-            ## Step 5: Slack main post
-            Channel C0APW8DSA4R. Write JSON to /tmp/slack_main.json, POST via
-            curl -d @file to https://slack.com/api/chat.postMessage with header
+            ## Step 4: Slack post (single message, no thread, no clips)
+            Channel C0APW8DSA4R. ONE chat.postMessage. Write JSON to
+            /tmp/slack_main.json, POST via curl -d @file to
+            https://slack.com/api/chat.postMessage with header
             "Authorization: Bearer $SLACK_BOT_TOKEN" and
             "Content-Type: application/json; charset=utf-8".
 
-            Blocks (must all be present):
-              1. header — practice name
-              2. section with fields: Practice, Date, Signal, Themes
-              3. section with attendees + source ("Will's Fathom" / "Caitlin's Fathom")
-              4. section — 3 numbered Key Takeaways
-              5. divider
-              6. section — Dream Solution as blockquote
-              7. section — 5 Ideal Features (bulleted, each with urgency)
-              8. actions — two buttons: "Open in Notion" ({notion_page_url}) and
-                 "Watch on Fathom" ($SHARE_URL)
+            Distil a 3-to-5-sentence plain-prose summary from your analysis.
+            Cover: who attended (practice + lead person + role), what they
+            currently use, their headline problem, and the opportunity signal
+            in one or two final sentences. No emoji-bullet lists, no quote
+            blocks, no field grids. Just a clear paragraph someone can skim
+            in 15 seconds.
 
-            Capture the "ts" from the response (main_ts).
+            Blocks (exactly these three, in order):
+              1. header — practice name (plain text, no emoji)
+              2. section — the 3-5 sentence summary as a single mrkdwn block
+              3. actions — two buttons:
+                   { type: "button", text: { type:"plain_text", text:"Open in Notion" },
+                     url: "$NOTION_URL", style: "primary" }
+                   { type: "button", text: { type:"plain_text", text:"Watch on Fathom" },
+                     url: "$SHARE_URL" }
 
-            ## Step 6: Slack thread reply — 10 Key Quotes
-            POST chat.postMessage with thread_ts=main_ts. Single message with all
-            10 quotes grouped by emoji category (:red_circle:, :star:, :fire:,
-            :zap:) — Slack-format links: <$SHARE_URL?timestamp=SECS|Watch>.
+            That is the ENTIRE Slack output. Do not post a thread reply.
+            Do not upload video clips. Do not run ffmpeg. Do not probe
+            $SHARE_URL/video.m3u8. The Notion page (Step 3) holds the full
+            analysis — Slack just links to it.
 
-            ## Step 7: 5 video clips (required when m3u8 is accessible)
-            Probe: curl -sI "$SHARE_URL/video.m3u8" | head -1
-            Also verify the body starts with "#EXTM3U":
-              curl -s "$SHARE_URL/video.m3u8" | head -c 10
-            If HTTP 404/403 OR body isn't #EXTM3U, skip clips for this meeting
-            but DO NOT fail the run. (The main post + thread already have
-            Watch links.) Log it and move on.
-
-            Otherwise, pick clips under **strict** criteria. Quantity is flexible
-            — typically 5, up to **10 clips** if high-yield material genuinely
-            warrants it. Fewer high-quality clips beat more mediocre ones.
-            Priority order (descend only if higher tiers are exhausted):
-
-              TIER 1 — VERY HIGH explicit praise:
-                Partner audibly enthused about what they see. "Wow", "this is
-                amazing", "I love that", "exactly what we need", buy-signal
-                language ("if we do want to go ahead"). EXCLUDE lukewarm
-                politeness: "yeah nice", "brilliant" as filler, "ok cool".
-                Must read as visceral, not polite.
-
-              TIER 2 — Direct feature requests:
-                Explicit "can it do X?", "does it support Y?", "I wish it did Z".
-                EXCLUDE meta/scheduling questions like "are you going to talk
-                about X next?", "will you cover Y?". The ask must be about the
-                product's CAPABILITY, not the conversation's STRUCTURE.
-
-              TIER 3 — Detailed problem explanations:
-                Partner describing pain across multiple sentences, with specifics
-                (systems, constraints, numbers, workarounds). EXCLUDE one-liner
-                problems like "it's time-consuming" — those belong only in the
-                text Key Quotes thread (Step 6), not the video clips. Include
-                at least 1 tier-3 clip per meeting for context.
-
-            How to apply: scan transcript for each tier top-down. If tier 1
-            yields 3 strong clips, that's the set — don't force 5. If tiers 1+2
-            yield 8, use 8. Never pad to hit a count. Skip rambling/low-density
-            quotes even if long.
-
-            For each selected quote with timestamp TS (in seconds):
-                timeout 90 ffmpeg -y \
-                  -i "$SHARE_URL/video.m3u8" \
-                  -ss $((TS-5)) -t 20 \
-                  -c:v libx264 -preset ultrafast -crf 28 \
-                  -c:a aac -b:a 128k \
-                  -movflags +faststart \
-                  /tmp/c.mp4
-                if /tmp/c.mp4 exists and >1000 bytes:
-                  Slack 3-step upload:
-                    POST files.getUploadURLExternal — get upload_url + file_id
-                    PUT file to upload_url
-                    POST files.completeUploadExternal with thread_ts=main_ts,
-                         initial_comment="$EMOJI _\"$QUOTE\"_ — $SPEAKER",
-                         channel_id="C0APW8DSA4R",
-                         files=[{ id:file_id, title:"..." }]
-                rm -f /tmp/c.mp4
-            Use :one:…:five: emoji prefixes on the 5 clips in narrative order.
-            Never block prior steps on clip failures.
+            If the Slack post fails non-2xx, log the body and exit non-zero
+            (the Notion page is already written, so re-firing won't duplicate
+            it — but re-firing is your call, not the workflow's).
 
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and

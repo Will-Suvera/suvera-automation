@@ -1,20 +1,11 @@
-name: Watchdog — daily reconciliation
+name: Watchdog — manual reconciliation (disabled cron)
 
-# Once-daily reconciliation check. Independent of the main routine:
-# queries Fathom directly, counts "Planner" mentions in each transcript,
-# and posts a list to Slack so Will can eyeball whether the main routine
-# silently missed anything today.
-#
-# Designed to catch the Friday 2026-04-17 failure mode: routine fires,
-# Fathom returns meetings, but Notion creates fail silently (e.g. missing
-# MCP permissions). Watchdog doesn't touch Notion or the routine — it
-# reports what the routine *should have* processed so drift is visible.
+# Manual reconciliation check. The scheduled trigger was removed
+# 2026-05-15 — Will doesn't want daily insights posts in the channel.
+# Fire manually (`gh workflow run watchdog.yml`) if you need to
+# eyeball today's qualifying meetings against what landed in Slack.
 
 on:
-  schedule:
-    # 19:30 UTC Mon–Fri — 20:30 BST, after UK working hours so all of
-    # today's meetings have ended + been transcribed.
-    - cron: '30 19 * * 1-5'
   workflow_dispatch: {}
 
 concurrency:
