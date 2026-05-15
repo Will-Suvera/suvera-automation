@@ -118,12 +118,10 @@ jobs:
           echo "Missing from Notion: $COUNT"
 
           if [ "$COUNT" -eq 0 ]; then
-            curl -sS -X POST \
-              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              -H "Content-Type: application/json; charset=utf-8" \
-              -d "$(jq -nc --arg ch "$CHANNEL" \
-                '{channel:$ch, text:":white_check_mark: Manual backfill: nothing to do — every recent Fathom meeting is already in Notion."}')" \
-              https://slack.com/api/chat.postMessage > /dev/null
+            # No gaps — exit silently, do NOT post to Slack. Keeps the
+            # channel quiet on healthy days; the GH Actions run log is
+            # the audit trail.
+            echo "Nothing to fire — exiting silently."
             exit 0
           fi
 

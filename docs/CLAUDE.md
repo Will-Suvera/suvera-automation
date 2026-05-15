@@ -2,7 +2,7 @@
 
 Full documentation for the hands-free pipeline that turns Fathom partner meetings into Notion analyses + Slack posts + video clips. Everything runs on the Max subscription — **zero API billing**.
 
-> **Status (May 15 2026):** Ellena onboarded. Watchdog cron disabled (manual-only). Slack output redesigned: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip cutting + upload moved out of Claude's bash tool into a deterministic `jq + ffmpeg + curl` workflow step (Claude only writes a `/tmp/clips.json` manifest). Master Synthesis update removed. Notion dedup added so backfill replays don't duplicate pages.
+> **Status (May 15 2026):** Ellena onboarded. Watchdog cron disabled (manual-only). Slack output redesigned: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip cutting + upload moved out of Claude's bash tool into a deterministic `jq + ffmpeg + curl` workflow step (Claude only writes a `/tmp/clips.json` manifest). Master Synthesis update removed. Notion dedup added so backfill replays don't duplicate pages. **Manual + scheduled backfill** added (§7) — pinned Slack button / browser bookmark fires `fire-unprocessed.yml`, also runs daily at 16:00 UTC. Silent when no gaps. All three Fathom webhooks force-recreated to clear Svix pause state.
 
 ---
 
@@ -205,11 +205,40 @@ This split exists because Claude was reliably skipping the clip step inside the 
 
 ## 6. Workflow: watchdog.yml
 
-Pure bash. Queries Fathom Will + Caitlin directly for last-24h external meetings, counts Planner mentions per transcript, posts a reconciliation list to Slack. Independent of the webhook pipeline — so if the main workflow is silently broken, the watchdog still reports what *should* have been processed.
+Pure bash. Queries Fathom Will + Caitlin + Ellena directly for last-24h external meetings, counts Planner mentions per transcript, posts a reconciliation list to Slack. Independent of the webhook pipeline.
 
-**What it answers:** "Did today's qualifying meetings actually land in Slack?"
+**Status:** cron disabled 2026-05-15 (`workflow_dispatch` only). Default-off because the auto-fire pipeline + the daily backfill sweep (§7) already cover this.
 
-**When to check:** if the daily 19:30 UTC post in `#partner-meetings` shows meetings you don't remember seeing main-posts for, the main pipeline silently dropped them.
+---
+
+## 7. Workflow: fire-unprocessed.yml — manual + scheduled backfill
+
+One-click catch-up sweep. Scans the most recent ~50 external meetings per Fathom account (Will/Caitlin/Ellena ≈ several months of history), cross-references against Notion's Partner Meeting Library by Meeting ID, and fires `repository_dispatch` for each gap. Notion dedup makes it idempotent.
+
+**Triggers (three):**
+- **Daily cron** at `0 16 * * *` (16:00 UTC ≈ 17:00 BST in summer / 16:00 GMT in winter)
+- **Slack button / browser bookmark** — clicks a URL on the Cloudflare Worker (`/backfill?token=…`) which POSTs `repository_dispatch` with `event_type: fathom_manual_backfill`
+- **`gh workflow run fire-unprocessed.yml`**
+
+**Slack output policy:**
+- Gaps found → posts `:zap: Manual backfill: fired N missed meetings` with a bulleted list. Each meeting then lands as a full 8-block + thread + clips ~15 min later.
+- No gaps → **silent**. Channel stays quiet on healthy days.
+
+### 7.1 The Slack button + browser bookmark
+
+URL on the Cloudflare Worker:
+```
+https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev/backfill?token=<BACKFILL_TOKEN>
+```
+
+Worker endpoint (`src/worker.ts`):
+- `GET /backfill?token=…` — timing-safe token check, then POSTs `repository_dispatch` to the same repo with `event_type: fathom_manual_backfill`. Reuses existing `GITHUB_PAT` (`Contents: Read+Write` only — no new scope needed).
+
+Operational workflows:
+- `post-backfill-button.yml` — post a fresh pinned button to `C0APW8DSA4R`
+- `update-backfill-button.yml` (input: `message_ts`) — edit the existing pinned button via `chat.update` (use after rotating token or changing description)
+
+Rotating the token: regenerate, push to both Cloudflare (`wrangler secret put BACKFILL_TOKEN`) and GitHub (`gh secret set BACKFILL_TOKEN`), then re-post or update the Slack button.
 
 ---
 
