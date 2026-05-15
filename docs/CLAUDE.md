@@ -2,7 +2,7 @@
 
 Full documentation for the hands-free pipeline that turns Fathom partner meetings into Notion analyses + Slack posts + video clips. Everything runs on the Max subscription — **zero API billing**.
 
-> **Status (May 7 2026):** webhook chain healthy (smoke test green). Daily-summary workflow removed — per-meeting Slack posts cover the signal without a redundant rolled-up digest. Worker now mirrors every inbound webhook attempt to Slack `C0APW8DSA4R` for live debugging — see §11 (debug logging).
+> **Status (May 15 2026):** Ellena onboarded. Watchdog cron disabled (manual-only). Slack output redesigned: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip cutting + upload moved out of Claude's bash tool into a deterministic `jq + ffmpeg + curl` workflow step (Claude only writes a `/tmp/clips.json` manifest). Master Synthesis update removed. Notion dedup added so backfill replays don't duplicate pages.
 
 ---
 
@@ -156,22 +156,50 @@ claude setup-token   # prints new sk-ant-oat01-... → put in CLAUDE_CODE_OAUTH_
 - `workflow_dispatch` with fields `{account, recording_id, title, share_url, scheduled_start_time, calendar_invitees_domains_type}` (manual replay)
 
 **Client payload fields** (must all be present):
-- `account` — "will" or "caitlin"
+- `account` — "will", "caitlin", or "ellena"
 - `recording_id` — integer
 - `title` — string
 - `share_url` — FULL URL e.g. `https://fathom.video/share/SLUG` (not just the slug)
 - `scheduled_start_time` — ISO8601
 - `calendar_invitees_domains_type` — "one_or_more_external" or "all_internal" (filter exits if not external)
 
-**Max-turns:** 80 (was 40; raised so Step 7 clip uploads fit in budget).
-**Timeout:** 35 minutes (was 20; raised after Chipping Norton ran out of time during clip upload).
+**Max-turns:** 120. **Timeout:** 35 minutes.
 
-**Clip selection criteria (Step 7):** strict priority order:
-1. Very high explicit praise / buy signal (no lukewarm politeness)
-2. Direct feature requests (not meta "are you going to cover X?")
-3. Detailed multi-sentence problem explanations (not one-liners)
+### 5.1 Slack output layout (the "exact flow")
 
-Quantity flexible 3–10; don't pad to hit a count. At least 1 tier-3 for context.
+One main message + one quote thread reply + 5–10 video clip thread replies. Channel `C0APW8DSA4R` only.
+
+**Main post — 8 blocks (in order):**
+
+1. `header` — `:hospital: {Practice} — {Lead Person} ({Their Role})` (use literal 🏥; headers don't render shortcodes)
+2. `section` with 4 fields: `*Practice*`, `*Date*`, `*Signal*` (with `:large_green_circle:` / `:large_yellow_circle:` / `:red_circle:`), `*Themes*` (dot-separated)
+3. `section` — `*Attendees:* {names+roles} | *Source:* {Will's|Caitlin's|Ellena's} Fathom`
+4. `section` — one-line practice profile (`{patients} · {contracts} · {clinical system note}`)
+5. `section` — `*Key Takeaways*` (3 numbered, signal-relevance only)
+6. `section` — `:speech_balloon: *Dream Solution*` with 2 verbatim `>` blockquotes
+7. `section` — `*Ideal Features*` (5 bullets, `{urgency-emoji} {Feature} — {urgency} | {status}`, red→yellow→green)
+8. `actions` — two buttons: `Open in Notion` (primary, `$NOTION_URL`) and `Watch on Fathom` (`$SHARE_URL`)
+
+**Thread reply 1 — 10 quotes** grouped: `:red_circle: ×3` (Problems) · `:star: ×3` (Dream) · `:fire: ×2` (Reaction) · `:zap: ×2` (Powerful). Each quote verbatim with `<URL?timestamp=SECS|Watch>`.
+
+**Thread replies 2–N — 5 to 10 video clips** uploaded as Slack file attachments. Each captioned `:one:…:ten: _"{quote}"_ — {Speaker}`. Clips are 20s windows starting at `TS-5`.
+
+### 5.2 Clip selection criteria
+
+Strict priority, descending only if higher tiers exhausted:
+1. **Praise** — visceral explicit enthusiasm / buy signal (no lukewarm politeness)
+2. **Feature** — direct capability requests (not meta scheduling questions)
+3. **Problem** — multi-sentence pain with specifics (not one-liner gripes)
+
+Density over volume. Lead with praise, then features, then problems. At least 1 tier-3. Narrative `:one:`–`:ten:` follow chronological occurrence in the recording.
+
+### 5.3 Where each part is produced
+
+- Steps 1–5 (transcript → analysis → Notion → main post → quote thread) — `anthropics/claude-code-action@v1`
+- Step 6 — Claude writes `/tmp/clips.json` only (manifest of selected clips); no ffmpeg, no Slack uploads
+- "Upload video clips from manifest" step — deterministic bash: probes `$SHARE_URL/video.m3u8`, then for each clip in the manifest runs `ffmpeg -ss $((TS-5)) -t 20 …` and `files.getUploadURLExternal` + PUT + `files.completeUploadExternal` with `thread_ts`. Prints `CLIP_SUMMARY: uploaded=N of M, probe_status=…` to the GH log. Posts a `:rotating_light:` thread reply if probe passed but upload count is zero.
+
+This split exists because Claude was reliably skipping the clip step inside the action when the prompt got long — bash gives a deterministic, debuggable, GH-log-visible upload path.
 
 ---
 
