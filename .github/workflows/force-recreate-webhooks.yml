@@ -1,0 +1,113 @@
+name: Force-recreate Fathom webhooks (clear pause state)
+
+# Empirically discovered 2026-05-15: Fathom returns the SAME whsec for
+# the same account+URL combination, even across DELETE + re-POST. So
+# we can safely delete + recreate to clear any Svix pause state without
+# needing to update Cloudflare secrets.
+#
+# Run this when no real Fathom deliveries are arriving despite the
+# webhook URL being correct (most likely cause: Svix paused the
+# webhook after past 4xx/5xx from the Worker).
+#
+# Known webhook IDs as of 2026-05-15 (from verify-webhooks.yml run):
+#   Will:    n5psbvSTBR__6ttT
+#   Caitlin: vxB-Z7FQGq9vhgsP
+#   Ellena:  -SyMPp8mFj3tnf7e   (already deleted + recreated locally)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  recreate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      WORKER_URL: https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev/
+    steps:
+      - name: Delete + recreate each webhook
+        env:
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          EXPECTED_WHSEC_WILL: ${{ secrets.FATHOM_WEBHOOK_SECRET_WILL }}
+        run: |
+          set -eu
+
+          recreate() {
+            local label="$1" key="$2" old_id="$3" stored_whsec="${4:-}"
+
+            echo ""
+            echo "=== ${label} ==="
+
+            if [ -z "${key}" ]; then
+              echo "::warning::No API key configured for ${label} — skipping"
+              return
+            fi
+
+            echo "→ Deleting old id: ${old_id}"
+            DEL=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -X DELETE -H "X-Api-Key: ${key}" \
+              "https://api.fathom.ai/external/v1/webhooks/${old_id}")
+            if [ "$DEL" = "204" ] || [ "$DEL" = "200" ]; then
+              echo "  DELETE → HTTP ${DEL} ✓"
+            else
+              echo "::warning::  DELETE returned HTTP ${DEL} (may already be gone — continuing)"
+            fi
+
+            echo "→ Re-registering fresh"
+            RESP=$(curl -sS -X POST \
+              -H "X-Api-Key: ${key}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "destination_url": "'"${WORKER_URL}"'",
+                "triggered_for": ["my_recordings"],
+                "include_transcript": true,
+                "include_summary": true,
+                "include_action_items": true,
+                "include_crm_matches": false
+              }' \
+              "https://api.fathom.ai/external/v1/webhooks")
+
+            STATUS_OK=$(echo "$RESP" | jq -r 'has("id") and has("secret")' 2>/dev/null || echo "false")
+            if [ "$STATUS_OK" != "true" ]; then
+              echo "::error::Re-register failed for ${label}"
+              echo "$RESP" | head -c 600
+              return
+            fi
+
+            NEW_ID=$(echo "$RESP" | jq -r '.id')
+            NEW_URL=$(echo "$RESP" | jq -r '.url')
+            NEW_SECRET=$(echo "$RESP" | jq -r '.secret')
+
+            echo "::add-mask::${NEW_SECRET}"
+
+            echo "  new id:  ${NEW_ID}"
+            echo "  url:     ${NEW_URL}"
+
+            if [ "$NEW_URL" != "$WORKER_URL" ]; then
+              echo "::error::  URL mismatch on re-register: ${NEW_URL}"
+              return
+            fi
+            echo "  ✓ URL matches live Worker"
+
+            if [ -n "${stored_whsec}" ]; then
+              if [ "$NEW_SECRET" = "$stored_whsec" ]; then
+                echo "  ✓ Fresh whsec matches GH-stored value — Cloudflare needs NO update"
+              else
+                echo "::warning::  Fresh whsec DIFFERS from GH-stored — manual CF push required"
+                echo "  (raw secret masked from log; copy from a private dispatch)"
+              fi
+            else
+              echo "  (no stored whsec to compare; trusting Fathom's deterministic whsec assumption)"
+            fi
+          }
+
+          # Ellena already done locally; included here so the workflow is the
+          # canonical source of truth if it ever needs re-running.
+          recreate "Will"    "${FATHOM_WILL_KEY}"    "n5psbvSTBR__6ttT" "${EXPECTED_WHSEC_WILL}"
+          recreate "Caitlin" "${FATHOM_CAITLIN_KEY}" "vxB-Z7FQGq9vhgsP" ""
+          recreate "Ellena"  "${FATHOM_ELLENA_KEY}"  "VVcs7rU8ZWm8wTXF" ""
+
+          echo ""
+          echo "Done. All three webhooks recreated. If a webhook was previously"
+          echo "paused, the new registration has fresh delivery state."
