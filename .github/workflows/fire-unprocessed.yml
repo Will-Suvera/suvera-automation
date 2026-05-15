@@ -11,9 +11,11 @@ name: Fire backfill for any missed meetings
 
 on:
   workflow_dispatch: {}
+  repository_dispatch:
+    types: [fathom_manual_backfill]
 
 permissions:
-  contents: write   # needed to fire repository_dispatch
+  contents: write   # needed to fire repository_dispatch from within this run
 
 jobs:
   sweep:
