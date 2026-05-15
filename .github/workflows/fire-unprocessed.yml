@@ -15,6 +15,12 @@ on:
   workflow_dispatch: {}
   repository_dispatch:
     types: [fathom_manual_backfill]
+  schedule:
+    # 16:00 UTC daily = 17:00 BST in summer, 16:00 GMT in winter.
+    # Aim is "end-of-UK-workday catch-up" — catches anything that
+    # didn't auto-fire today and gives ~15 min for processing before
+    # the working day wraps.
+    - cron: '0 16 * * *'
 
 permissions:
   contents: write   # needed to fire repository_dispatch from within this run
