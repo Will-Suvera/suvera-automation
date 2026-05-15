@@ -1,0 +1,100 @@
+name: Verify Fathom webhook registrations (temp)
+
+# One-shot diagnostic. For each Fathom account, POSTs to Fathom's
+# /webhooks endpoint with our live Worker URL. Fathom is idempotent
+# (verified with Ellena 2026-05-15): re-registering an existing
+# webhook returns the same id + secret. So this is safe to run
+# repeatedly — it confirms each account's webhook is pointing to
+# our Worker without creating duplicates.
+#
+# The whsec is masked from the run log so this can run on a public
+# repo without leaking. Only the webhook's URL field is logged,
+# which is the value we actually need to verify.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      WORKER_URL: https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev/
+    steps:
+      - name: Verify each account
+        env:
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          # used for comparison so we can flag if a whsec drift exists for Will
+          EXPECTED_WHSEC_WILL: ${{ secrets.FATHOM_WEBHOOK_SECRET_WILL }}
+        run: |
+          set -eu
+
+          check() {
+            local label="$1" key="$2"
+
+            echo ""
+            echo "=== ${label} ==="
+            if [ -z "${key}" ]; then
+              echo "::warning::No API key configured for ${label} — skipping"
+              return
+            fi
+
+            RESP=$(curl -sS -X POST \
+              -H "X-Api-Key: ${key}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "destination_url": "'"${WORKER_URL}"'",
+                "triggered_for": ["my_recordings"],
+                "include_transcript": true,
+                "include_summary": true,
+                "include_action_items": true,
+                "include_crm_matches": false
+              }' \
+              "https://api.fathom.ai/external/v1/webhooks")
+
+            STATUS_OK=$(echo "$RESP" | jq -r 'has("id") and has("secret")' 2>/dev/null || echo "false")
+            if [ "$STATUS_OK" != "true" ]; then
+              echo "::error::${label} webhook registration failed"
+              echo "$RESP" | head -c 600
+              return
+            fi
+
+            ID=$(echo "$RESP" | jq -r '.id')
+            URL=$(echo "$RESP" | jq -r '.url')
+            SECRET=$(echo "$RESP" | jq -r '.secret')
+
+            # Mask the secret from the log
+            echo "::add-mask::${SECRET}"
+
+            echo "  id:   ${ID}"
+            echo "  url:  ${URL}"
+            echo "  secret: <masked>"
+
+            if [ "$URL" = "$WORKER_URL" ]; then
+              echo "  ✓ URL matches live Worker — Fathom will deliver here"
+            else
+              echo "::error::  URL MISMATCH — webhook is pointing elsewhere: ${URL}"
+            fi
+
+            # For Will only: compare against the whsec we have in GH secrets
+            # (used by the smoke test). If they match, CF is in sync.
+            if [ "$label" = "Will" ] && [ -n "${EXPECTED_WHSEC_WILL:-}" ]; then
+              if [ "$SECRET" = "$EXPECTED_WHSEC_WILL" ]; then
+                echo "  ✓ Will's whsec matches GH-stored value — Cloudflare is in sync"
+              else
+                echo "::warning::  Will's whsec drift detected — Cloudflare needs update"
+              fi
+            fi
+          }
+
+          check "Will"    "${FATHOM_WILL_KEY}"
+          check "Caitlin" "${FATHOM_CAITLIN_KEY}"
+          check "Ellena"  "${FATHOM_ELLENA_KEY}"
+
+          echo ""
+          echo "Done. If all three show 'URL matches', Fathom is wired to deliver."
+          echo "If 'no real deliveries' still happens after a new test meeting,"
+          echo "the issue is downstream of registration (paused webhook, plan"
+          echo "tier restriction, or Fathom-side trigger config)."
