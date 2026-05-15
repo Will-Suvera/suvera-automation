@@ -180,7 +180,7 @@ jobs:
 
             Capture the returned page id + url ($NOTION_URL below).
 
-            ## Step 4: Slack post (single message, no thread, no clips)
+            ## Step 4: Slack main post (8-block card)
             Channel C0APW8DSA4R. ONE chat.postMessage. Write JSON to
             /tmp/slack_main.json, POST via curl -d @file to
             https://slack.com/api/chat.postMessage with header
@@ -188,8 +188,8 @@ jobs:
             "Content-Type: application/json; charset=utf-8".
 
             Use EXACTLY this block layout (8 blocks, in order). All
-            section text is mrkdwn. Don't add a thread reply. Don't upload
-            video clips. Don't run ffmpeg. Don't probe $SHARE_URL/video.m3u8.
+            section text is mrkdwn. Capture the response "ts" — Steps 5
+            and 6 will reply in-thread.
 
             Signal colour key (use the right circle emoji for the signal):
               :large_green_circle: High   |   :large_yellow_circle: Medium   |   :red_circle: Low
