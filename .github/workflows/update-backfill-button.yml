@@ -1,37 +1,39 @@
-name: Post backfill button to Slack (one-shot)
+name: Update pinned backfill button (one-shot)
 
-# Posts a single message with a "Fire backfill" button into
-# C0APW8DSA4R. Pin the message after it lands.
-#
-# The button is a Slack URL button — clicking it opens the Worker's
-# /backfill endpoint in the user's browser, which fires the
-# fire-unprocessed.yml sweep. Same code path as the bookmark.
-#
-# Run once: `gh workflow run post-backfill-button.yml`. Re-run any
-# time you want to re-post the button (e.g. after rotating the
-# token; you'll need to update BACKFILL_TOKEN secret first).
+# Updates an existing pinned button message in-place via chat.update.
+# Use when the button's description text is stale but the URL is fine
+# (re-posting would lose the pin).
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      message_ts:
+        description: "ts of the message to update (e.g. 1778859623.872379)"
+        required: true
 
 jobs:
-  post:
+  update:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Post Slack message with button
+      - name: chat.update the pinned button
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           BACKFILL_WORKER_URL: ${{ secrets.BACKFILL_WORKER_URL }}
           BACKFILL_TOKEN: ${{ secrets.BACKFILL_TOKEN }}
+          TS: ${{ inputs.message_ts }}
         run: |
           set -eu
 
           URL="${BACKFILL_WORKER_URL%/}/backfill?token=${BACKFILL_TOKEN}"
 
-          PAYLOAD=$(jq -nc --arg ch "C0APW8DSA4R" --arg url "$URL" '
+          PAYLOAD=$(jq -nc \
+            --arg ch "C0APW8DSA4R" \
+            --arg ts "$TS" \
+            --arg url "$URL" '
             {
               channel: $ch,
+              ts: $ts,
               text: "Manual backfill button",
               blocks: [
                 {
@@ -59,15 +61,11 @@ jobs:
             -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
             -H "Content-Type: application/json; charset=utf-8" \
             -d "$PAYLOAD" \
-            https://slack.com/api/chat.postMessage)
+            https://slack.com/api/chat.update)
 
-          echo "$RESP" | jq '{ok, ts, channel, error}'
+          echo "$RESP" | jq '{ok, ts, error}'
           OK=$(echo "$RESP" | jq -r '.ok')
           if [ "$OK" != "true" ]; then
-            echo "::error::Slack post failed"
+            echo "::error::chat.update failed"
             exit 1
           fi
-
-          echo ""
-          echo "✅ Button posted. Open Slack and pin the message so it stays at the top of the channel:"
-          echo "   • Hover the message → ⋯ → Pin to channel"
