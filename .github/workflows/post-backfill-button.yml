@@ -1,0 +1,73 @@
+name: Post backfill button to Slack (one-shot)
+
+# Posts a single message with a "Fire backfill" button into
+# C0APW8DSA4R. Pin the message after it lands.
+#
+# The button is a Slack URL button — clicking it opens the Worker's
+# /backfill endpoint in the user's browser, which fires the
+# fire-unprocessed.yml sweep. Same code path as the bookmark.
+#
+# Run once: `gh workflow run post-backfill-button.yml`. Re-run any
+# time you want to re-post the button (e.g. after rotating the
+# token; you'll need to update BACKFILL_TOKEN secret first).
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post Slack message with button
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          BACKFILL_WORKER_URL: ${{ secrets.BACKFILL_WORKER_URL }}
+          BACKFILL_TOKEN: ${{ secrets.BACKFILL_TOKEN }}
+        run: |
+          set -eu
+
+          URL="${BACKFILL_WORKER_URL%/}/backfill?token=${BACKFILL_TOKEN}"
+
+          PAYLOAD=$(jq -nc --arg ch "C0APW8DSA4R" --arg url "$URL" '
+            {
+              channel: $ch,
+              text: "Manual backfill button",
+              blocks: [
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: ":zap: *Manual backfill*\nClick the button below to sweep the last 24 hours of Fathom meetings and fire any that haven'\''t been processed yet. Idempotent — already-processed meetings are skipped via Notion dedup, so safe to spam. Result posts as a single status line in this channel ~15s after you click."
+                  }
+                },
+                {
+                  type: "actions",
+                  elements: [
+                    {
+                      type: "button",
+                      text: { type: "plain_text", text: "Fire backfill", emoji: true },
+                      style: "primary",
+                      url: $url
+                    }
+                  ]
+                }
+              ]
+            }')
+
+          RESP=$(curl -sS -X POST \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$PAYLOAD" \
+            https://slack.com/api/chat.postMessage)
+
+          echo "$RESP" | jq '{ok, ts, channel, error}'
+          OK=$(echo "$RESP" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Slack post failed"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Button posted. Open Slack and pin the message so it stays at the top of the channel:"
+          echo "   • Hover the message → ⋯ → Pin to channel"
