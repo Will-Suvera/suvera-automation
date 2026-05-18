@@ -2,7 +2,7 @@
 
 Full documentation for the hands-free pipeline that turns Fathom partner meetings into Notion analyses + Slack posts + video clips. Everything runs on the Max subscription — **zero API billing**.
 
-> **Status (May 15 2026):** Ellena onboarded. Watchdog cron disabled (manual-only). Slack output redesigned: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip cutting + upload moved out of Claude's bash tool into a deterministic `jq + ffmpeg + curl` workflow step (Claude only writes a `/tmp/clips.json` manifest). Master Synthesis update removed. Notion dedup added so backfill replays don't duplicate pages. **Manual + scheduled backfill** added (§7) — pinned Slack button / browser bookmark fires `fire-unprocessed.yml`, also runs daily at 16:00 UTC. Silent when no gaps. All three Fathom webhooks force-recreated to clear Svix pause state.
+> **Status (May 18 2026):** Worker Slack-debug channel disabled (`SLACK_DEBUG_CHANNEL=""`) — channel now stays quiet except for actual meeting cards and manual backfill summaries. Use `npx wrangler tail` for live Worker diagnostics. Ellena onboarded. Watchdog cron disabled. Slack output: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip uploads in a deterministic bash workflow step. Manual + scheduled backfill (§7) — pinned Slack button / browser bookmark / daily 16:00 UTC cron, silent when no gaps. All three Fathom webhooks force-recreated to clear Svix pause state.
 
 ---
 
@@ -397,13 +397,16 @@ gh run watch $(gh run list --workflow=watchdog.yml --limit 1 --json databaseId -
 **PASS**: Slack post appears listing 24h external meetings with Planner mention counts, or `_No external meetings…_` if a quiet day.
 **FAIL**: fix in the `fetch_meetings` jq expression — Fathom's schema uses `calendar_invitees_domains_type == "one_or_more_external"`, not `.invitees[]?.is_external`. This bug already bit once.
 
-### 10.4 Is Worker debug logging mirroring to Slack?
-After triggering any inbound POST (e.g. `gh workflow run test-webhook.yml`), a single line should appear in `C0APW8DSA4R`:
-- `:white_check_mark: dispatched → GitHub (HTTP 204)` on success
-- `:rotating_light: dispatch FAILED (HTTP 4xx/5xx)` on GitHub-side error
-- `:warning: rejected: <reason>` on Worker-side rejection (bad signature, missing headers, skew)
+### 10.4 Live Worker diagnostics
 
-If nothing appears: confirm `SLACK_BOT_TOKEN` is set as a Cloudflare secret (`npx wrangler secret list`) and `SLACK_DEBUG_CHANNEL` in `wrangler.toml` is non-empty.
+Slack debug mirroring is **disabled by default** (`SLACK_DEBUG_CHANNEL=""` in `wrangler.toml`, 2026-05-18). To diagnose Worker activity live:
+
+```bash
+cd "$HOME/Platform <> Commercial Sync/automation/fathom-webhook"
+npx wrangler tail
+```
+
+To temporarily re-enable Slack mirroring: set `SLACK_DEBUG_CHANNEL = "C0APW8DSA4R"` in `wrangler.toml`, `npx wrangler deploy`, observe, then revert.
 
 ### 10.5 Does Fathom → real production work?
 Ultimate test: have a short Fathom meeting with one external invitee where "Planner" is mentioned 3+ times. End the meeting, wait ~15 min. Expected:
