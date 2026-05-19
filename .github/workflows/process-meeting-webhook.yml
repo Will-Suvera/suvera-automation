@@ -141,16 +141,26 @@ jobs:
 
             ## Step 3: Notion page (REST API) — with dedup
 
-            ### 3a. Check for existing entry first
+            ### 3a. Check for existing entry first (dedup + race protection)
             POST https://api.notion.com/v1/data_sources/8115f0ee-00c8-488a-a05b-57726af0acf4/query
             body: { "filter": { "property": "Meeting ID", "rich_text": { "equals": "$RID" } } }
 
             If results array is non-empty:
-              - Set $NOTION_URL = results[0].url
-              - Set $NOTION_PAGE_ID = results[0].id
-              - Skip 3b entirely (do NOT create a duplicate page)
-              - Log "Notion page already exists for RID=$RID — reusing URL"
-              - Jump to Step 4 (still post the new-format Slack message)
+              - Read `created_time` from results[0] (ISO8601 timestamp).
+              - Compute the age in minutes: now - created_time.
+              - **If age < 30 minutes:** this is a near-simultaneous duplicate
+                (two Fathom webhooks for the same meeting, or a backfill
+                colliding with the live webhook). EXIT THE ENTIRE WORKFLOW
+                SILENTLY. Do NOT post any Slack message. Do NOT proceed to
+                Step 4 or beyond. Log "Recent Notion entry (Xm old) detected
+                — exiting to avoid duplicate Slack post" and stop.
+              - **If age >= 30 minutes:** this is a legitimate backfill replay
+                of a meeting from earlier. Reuse the existing page:
+                  - Set $NOTION_URL = results[0].url
+                  - Set $NOTION_PAGE_ID = results[0].id
+                  - Skip 3b entirely (do NOT create a duplicate page)
+                  - Log "Notion page already exists for RID=$RID (Xm old) — reusing URL"
+                  - Jump to Step 4 (post the Slack message with new format)
 
             If results array is empty, continue to 3b.
 
@@ -304,25 +314,74 @@ jobs:
 
             Pick 5 to 10 clips under STRICT tier criteria. Quantity is
             flexible — fewer high-quality clips beat more mediocre ones.
-            At least 5, no more than 10. Priority order:
+            At least 5, no more than 10. **New priority order: pain
+            points → praise → ideal features.** Each clip MUST be from
+            the partner / practice manager / clinician — never from a
+            Suvera attendee.
 
-              TIER 1 — praise: VERY HIGH explicit enthusiasm. "Wow",
-                "this is amazing", "I love that", "exactly what we
-                need", "if we do want to go ahead". EXCLUDE lukewarm
-                politeness ("yeah nice", filler "brilliant"). Must
-                read as visceral, not polite.
+            TIER 1 — PAIN POINTS &amp; GAPS (lead with these):
+              The partner describing what's broken in their current
+              workflow, in specifics. Include AT LEAST 2 clips from
+              this tier, ideally 3. What counts:
+                ✓ Multi-sentence descriptions of pain with concrete
+                  detail — staff hours, patient counts, named tools,
+                  workarounds, failure modes (e.g. "we spend three
+                  days a month re-running searches in Ardens because
+                  it doesn't capture multi-condition patients").
+                ✓ Articulated gaps in their current tool stack — "we
+                  don't have a way to…", "the system can't…", "we end
+                  up doing it manually because…".
+                ✓ Patient-side consequences — "patients keep coming
+                  in twice", "they stop responding to our texts",
+                  "we miss the ones who don't have a mobile".
+                ✓ Team-side consequences — overwhelmed pharmacists,
+                  burnt-out admin, bus-factor of one, recall living
+                  in one person's spreadsheet.
+              EXCLUDE one-liner gripes ("it's time-consuming"), vague
+              complaints without specifics, and any Suvera staff
+              describing the problem on the partner's behalf.
 
-              TIER 2 — feature: Direct capability requests. "Can it
-                do X?", "does it support Y?", "I wish it did Z".
-                EXCLUDE meta/scheduling questions ("will you cover
-                X next?"). Product capability only.
+            TIER 2 — PRAISE (visceral reactions to the demo):
+              The partner reacting in the moment to something Planner
+              does. Include 1–2 clips. What counts:
+                ✓ Audible enthusiasm and surprise — "wow", "bloody
+                  hell", "that's a game changer", "we'll sign up",
+                  "I love that".
+                ✓ Buy-signal language — "if we do want to go ahead",
+                  "this is exactly what we need", "no-brainer", "the
+                  practice is going to beg you for this".
+                ✓ Direct competitive framing — "I haven't seen that
+                  in anyone else's", "this is on a different level
+                  to [competitor]".
+              EXCLUDE lukewarm politeness — "yeah nice", filler
+              "brilliant", "okay cool", "interesting". Must read as
+              genuine emotional reaction, not conversational filler.
 
-              TIER 3 — problem: Multi-sentence pain with specifics
-                (systems, constraints, numbers, workarounds). EXCLUDE
-                one-liner gripes. Include at least 1 tier-3 clip.
+            TIER 3 — IDEAL FEATURES (what they want / asked for):
+              The partner describing the feature or workflow they
+              want, in their own words. Include 1–2 clips. What
+              counts:
+                ✓ Direct capability requests — "can it do X?",
+                  "does it support Y?", "I wish it did Z".
+                ✓ Articulated dream state — "I'd like a system
+                  that…", "it would be ideal if…", "the dream is…".
+                ✓ Configuration / integration asks — specific
+                  features named (ICE/TQuest, multi-condition,
+                  booking links, EMIS coding, etc.).
+              EXCLUDE meta or scheduling questions ("will you cover
+              X next?", "when's the next demo?"). Must be about
+              product capability, not about the conversation's
+              structure.
 
-            Selection ordering rule (from saved feedback): praise
-            first, then features, then problems. Density over volume.
+            **Selection ordering rule (updated 2026-05-20):** lead
+            with pain-point clips first (so the page opens with the
+            problem), then praise clips, then ideal-feature clips.
+            This matches how a viewer should read the thread:
+            "here's the pain → here's the reaction → here's the
+            specific ask". Density over volume — fewer strong clips
+            beat more mediocre ones. Narrative `:one:`–`:ten:`
+            prefixes follow the clip's chronological position in
+            the recording (not the tier order).
 
             Write the manifest to /tmp/clips.json with this exact schema
             (no comments, valid JSON only):
@@ -331,25 +390,47 @@ jobs:
                 "share_url": "$SHARE_URL",
                 "practice": "<practice name, no region>",
                 "clips": [
-                  { "ts": 65, "speaker": "Dr Smith",
+                  { "start_ts": 308, "end_ts": 342,
+                    "speaker": "Dr Smith",
                     "quote": "verbatim quote text",
-                    "emoji": ":one:", "tier": "praise" },
-                  { "ts": 312, "speaker": "...",
+                    "emoji": ":one:", "tier": "pain" },
+                  { "start_ts": 60,  "end_ts": 88,
+                    "speaker": "...",
                     "quote": "...",
-                    "emoji": ":two:", "tier": "feature" }
+                    "emoji": ":two:", "tier": "praise" },
+                  { "start_ts": 900, "end_ts": 928,
+                    "speaker": "...",
+                    "quote": "...",
+                    "emoji": ":three:", "tier": "feature" }
                 ]
               }
 
             Field rules:
-              - ts: integer seconds (convert from HH:MM:SS).
+              - **start_ts and end_ts (CRITICAL — must capture full sentences):**
+                Pick start_ts as the moment the speaker BEGINS the relevant
+                utterance. Add 1–2 seconds of lead-in if speech is mid-flow.
+                Pick end_ts as the moment they FINISH the complete thought —
+                including the final word, with at least 0.5–1s of trailing
+                silence/breath if available. Aim for clips between **15 and
+                45 seconds** long. NEVER cut a sentence in half. If a thought
+                runs longer than 45s, extend the clip rather than truncate
+                the speaker mid-sentence. Use the transcript's full timing —
+                if the transcript shows speech from 305s through 339s on a
+                single coherent point, use start_ts=305, end_ts=340.
               - quote: verbatim from transcript. Single line. Strip any
-                newlines. Slack will render it italicised inside the
-                upload's initial_comment.
-              - emoji: :one: :two: :three: :four: :five: (and
-                :six:…:ten: if more than 5). Order by where the moment
-                occurs in the recording (chronological), even though
-                you selected them in praise→feature→problem order.
-              - tier: "praise" | "feature" | "problem".
+                newlines. This is rendered as a Slack-italic caption beneath
+                the clip; it does NOT need to be the exact text spoken in
+                the clipped window — pick the most quotable line from
+                within the start_ts–end_ts range.
+              - speaker: name and role if known, otherwise role only
+                (e.g. "Dr Macarena Fernandez-Garcia, GP Partner").
+              - emoji: :one: :two: :three: :four: :five: (and :six:…:ten: if
+                more than 5). Order by where the moment occurs in the
+                recording (chronological), independent of tier order.
+              - tier: "pain" | "praise" | "feature". Use exact lowercase.
+                "pain" = pain points and gaps (Tier 1), "praise" = visceral
+                demo reactions (Tier 2), "feature" = ideal-feature requests
+                (Tier 3).
 
             After writing the file, print exactly:
               MANIFEST_WRITTEN: <n> clips → /tmp/clips.json
@@ -416,21 +497,40 @@ jobs:
 
           UPLOADED=0
           for i in $(seq 0 $((N - 1))); do
-            TS=$(jq -r ".clips[$i].ts"      "$MANIFEST")
+            # Manifest now uses start_ts / end_ts for full-sentence
+            # clipping. Fall back to legacy ts ± 5s/20s if a manifest
+            # entry only has the old ts field, so older manifests
+            # mid-flight still process.
+            START_TS=$(jq -r ".clips[$i].start_ts // empty" "$MANIFEST")
+            END_TS=$(jq -r   ".clips[$i].end_ts // empty"   "$MANIFEST")
+            LEGACY_TS=$(jq -r ".clips[$i].ts // empty"      "$MANIFEST")
             SPEAKER=$(jq -r ".clips[$i].speaker" "$MANIFEST")
-            QUOTE=$(jq -r ".clips[$i].quote"   "$MANIFEST")
-            EMOJI=$(jq -r ".clips[$i].emoji"   "$MANIFEST")
-            TIER=$(jq -r ".clips[$i].tier"     "$MANIFEST")
+            QUOTE=$(jq -r   ".clips[$i].quote"   "$MANIFEST")
+            EMOJI=$(jq -r   ".clips[$i].emoji"   "$MANIFEST")
+            TIER=$(jq -r    ".clips[$i].tier"    "$MANIFEST")
 
-            START=$((TS - 5))
+            if [ -n "$START_TS" ] && [ -n "$END_TS" ]; then
+              START=$START_TS
+              DURATION=$((END_TS - START_TS))
+              # Clamp to sensible bounds (5–90s). Never shorter than 5s,
+              # never longer than 90s.
+              [ $DURATION -lt 5 ]  && DURATION=5
+              [ $DURATION -gt 90 ] && DURATION=90
+            elif [ -n "$LEGACY_TS" ]; then
+              START=$((LEGACY_TS - 5))
+              DURATION=25
+            else
+              echo "  no timestamps on clip $((i + 1)) — skipping"
+              continue
+            fi
             [ $START -lt 0 ] && START=0
 
-            echo "→ Clip $((i + 1))/${N}: ${SPEAKER} @ ${TS}s (${TIER})"
+            echo "→ Clip $((i + 1))/${N}: ${SPEAKER} @ ${START}s for ${DURATION}s (${TIER})"
 
             rm -f /tmp/c.mp4
-            if ! timeout 90 ffmpeg -y -hide_banner -loglevel error \
+            if ! timeout 120 ffmpeg -y -hide_banner -loglevel error \
               -i "${SHARE_URL}/video.m3u8" \
-              -ss "$START" -t 20 \
+              -ss "$START" -t "$DURATION" \
               -c:v libx264 -preset ultrafast -crf 28 \
               -c:a aac -b:a 128k \
               -movflags +faststart /tmp/c.mp4; then
