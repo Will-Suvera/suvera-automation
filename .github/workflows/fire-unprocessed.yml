@@ -41,6 +41,7 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGER_EVENT: ${{ github.event_name }}
         run: |
           set -eu
 
@@ -151,6 +152,14 @@ jobs:
             SUMMARY_LINES+="• ${TITLE} (${ACCOUNT}, RID \`${RID}\`)\n"
             sleep 4
           done
+
+          # Only post the summary to Slack when triggered manually (button
+          # / workflow_dispatch). The daily cron stays silent — meetings
+          # themselves arrive via the normal pipeline ~15 min later.
+          if [ "$TRIGGER_EVENT" = "schedule" ]; then
+            echo "Triggered by cron — skipping Slack summary post."
+            exit 0
+          fi
 
           MSG=":zap: *Manual backfill* — fired ${COUNT} missed meetings. They'll appear in this channel over the next ~15 min.\n${SUMMARY_LINES}"
 
