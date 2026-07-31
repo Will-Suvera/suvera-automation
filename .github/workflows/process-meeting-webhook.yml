@@ -185,6 +185,16 @@ jobs:
                 SMS and Comms, Onboarding, SystmOne, Recall Workflow, QOF,
                 Booking Links, Churn Risk, Upsell, Feature Request, Competitive Intel
               Status (select) — "New"
+              ICP Segment (select) — ONE of: PM-QOF (practice manager/ops,
+                QOF-income framing), PM-Capacity (understaffed, buys time
+                saved), GP-Partner-Income (partner-led, profit/income),
+                PCN-CD-Scale (PCN clinical director involved), Fed-Exec
+                (federation/at-scale exec), S1-Blocked (SystmOne constraint
+                dominates the conversation)
+              Sentiment (select) — Delighted / Satisfied / Neutral /
+                Frustrated / At Risk. NEVER infer sentiment from politeness —
+                NHS staff are polite while churning.
+              Stage (select) — Prospect / Onboarding / Live / Renewal / Churned
               Date (date) — { start: "$SCHEDULED_START", is_datetime: true } if the
                 property name is "Date" and supports datetime; otherwise adjust.
             Children: full markdown analysis rendered as Notion blocks (heading_2
@@ -193,6 +203,27 @@ jobs:
             the rich_text "link" field.
 
             Capture the returned page id + url ($NOTION_URL below).
+
+            ### 3c. Feedback Ledger rows (the PMF Brain feed)
+            Data source id: ee20500a-d7ed-45f7-949f-ca18770b3e63 ("Feedback
+            Ledger", sibling of the Partner Meeting Library). For each
+            concrete item surfaced in the call (typically 2-6 per call — only
+            real items, never filler), POST https://api.notion.com/v1/pages
+            with parent { "type":"data_source_id",
+            "data_source_id":"ee20500a-d7ed-45f7-949f-ca18770b3e63" } and
+            properties:
+              Item (title) — short imperative label
+              Type (select) — Bug / Feature Ask / Messaging Insight /
+                Churn Signal / Expansion Signal / Competitive Intel /
+                Referral Signal
+              ICP Segment (select) — same option set as 3b
+              Practice (rich_text)
+              Source Call (relation) — [{ "id": "$NOTION_PAGE_ID" }]
+              Verbatim Quote (rich_text) — exact words + speaker + timestamp
+              Status (select) — "New"
+              Date (date) — the meeting date
+            GET the data source schema first if a property 400s. Ledger
+            failures must NOT block Steps 4-6 — log and continue.
 
             ## Step 4: Slack main post (8-block card)
             Channel C0APW8DSA4R. ONE chat.postMessage. Write JSON to
