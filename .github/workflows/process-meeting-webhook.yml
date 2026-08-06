@@ -505,6 +505,10 @@ jobs:
             exit 1
           fi
 
+          # Printed so surgical clip edits can target the thread later
+          # without needing channels:history scope (see runbook 9.2).
+          echo "MAIN_TS=${MAIN_TS}"
+
           if [ "$N" -lt 1 ]; then
             echo "CLIP_SUMMARY: clips.json had 0 clips — skipping upload"
             exit 0
