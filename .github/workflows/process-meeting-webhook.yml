@@ -567,9 +567,14 @@ jobs:
             echo "→ Clip $((i + 1))/${N}: ${SPEAKER} @ ${START}s for ${DURATION}s (${TIER})"
 
             rm -f /tmp/c.mp4
+            # -ss BEFORE -i = input seeking: jumps straight to the HLS
+            # segment instead of decoding from 0:00. Output seeking here
+            # made every clip past ~13 min hit the 120s timeout
+            # (Riverside run 31103647763: 5 of 7 clips lost).
             if ! timeout 120 ffmpeg -y -hide_banner -loglevel error \
+              -ss "$START" \
               -i "${SHARE_URL}/video.m3u8" \
-              -ss "$START" -t "$DURATION" \
+              -t "$DURATION" \
               -c:v libx264 -preset ultrafast -crf 28 \
               -c:a aac -b:a 128k \
               -movflags +faststart /tmp/c.mp4; then
