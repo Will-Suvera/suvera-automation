@@ -2,24 +2,26 @@
 
 Full documentation for the hands-free pipeline that turns Fathom partner meetings into Notion analyses + Slack posts + video clips. Everything runs on the Max subscription — **zero API billing**.
 
-> **Status (May 18 2026):** Worker Slack-debug channel disabled (`SLACK_DEBUG_CHANNEL=""`) — channel now stays quiet except for actual meeting cards and manual backfill summaries. Use `npx wrangler tail` for live Worker diagnostics. Ellena onboarded. Watchdog cron disabled. Slack output: 8-block main card + 10-quote thread reply + 5-10 video clips. Clip uploads in a deterministic bash workflow step. Manual + scheduled backfill (§7) — pinned Slack button / browser bookmark / daily 16:00 UTC cron, silent when no gaps. All three Fathom webhooks force-recreated to clear Svix pause state.
+> **Status (Sep 3 2026):** BANT block + open-questions count added to the Slack card; Notion pages now open with BANT / Questions we couldn't answer / Client Questions Log / Value & Financial Savings (new properties `Value Discussed`, `Open Questions`). Previous status (May 18 2026): Worker Slack-debug channel disabled (`SLACK_DEBUG_CHANNEL=""`) — the channel now stays quiet except for actual meeting cards and manual backfill summaries. Use `npx wrangler tail` for live Worker diagnostics instead. Ellena onboarded. Watchdog cron disabled. Slack output: 10-block main card + 10-quote thread reply + 5-10 video clips. Clip uploads handled by a deterministic bash workflow step. Manual + scheduled backfill (§7) — pinned Slack button / browser bookmark / daily 16:00 UTC cron, all firing `fire-unprocessed.yml`, silent when no gaps. All three Fathom webhooks force-recreated to clear Svix pause state.
 
 ---
 
 ## 1. What this automates
 
-When a Fathom recording finishes on Will's or Caitlin's account:
+When a Fathom recording finishes on Will's, Caitlin's, or Ellena's account:
 
 1. Fathom fires a signed webhook
 2. A Cloudflare Worker verifies the Svix signature and triggers a GitHub Actions workflow
 3. The workflow runs Claude Code (subscription-funded) which:
    - Fetches the transcript
-   - Filters: external invitees only + "Planner" mentioned ≥3 times
-   - Writes a full-format analysis to a new Notion page in the Partner Meeting Library
-   - Updates the Master Synthesis page
-   - Posts a header card to Slack `#partner-meetings`
+   - Filters: external invitees only + product-relevant (title contains "planner"/"recall", or transcript mentions "recall" ≥1 time — changed 2026-07-10; we say "Recall" on calls now)
+   - Writes a full-format analysis to a new Notion page in the Partner Meeting Library (dedup against existing Meeting ID — reuses URL if already created)
+   - Posts the 10-block main card to Slack `C0APW8DSA4R` (BANT summary + count of unanswered client questions — the questions themselves stay in Notion)
    - Posts a threaded reply with 10 key quotes
-   - Cuts and uploads ~5–10 video clips to the same thread
+   - Writes a `/tmp/clips.json` manifest of 5–10 selected clips
+4. A subsequent bash workflow step reads the manifest and uploads the video clips to the same thread via ffmpeg + Slack files.* APIs (deterministic, no Claude orchestration).
+
+The Master Synthesis page is no longer updated automatically.
 
 One scheduled workflow complements it:
 
@@ -60,7 +62,7 @@ One scheduled workflow complements it:
          ┌────────────────────────────────────────────┐
          │  Claude Code pipeline (subscription runs)   │
          │    1 fetch transcript from Fathom           │
-         │    2 filter: external + Planner ≥ 3         │
+         │    2 filter: external + title/recall check   │
          │    3 full analysis (no TLDR)                │
          │    4 Notion REST: create page               │
          │    5 Notion REST: patch Master Synthesis    │
@@ -128,6 +130,8 @@ package.json          ← wrangler + types
 | `FATHOM_WEBHOOK_SECRET_WILL` | GitHub repo Secrets **and** Cloudflare | `whsec_…`. GitHub copy used by the smoke test to sign test requests. Cloudflare copy used by the Worker to verify real requests. Must be identical. |
 | `GITHUB_PAT` | Cloudflare Worker (only) | Fine-grained PAT on `suvera-automation`. Permission: **Contents: Read and write** (required for `POST /dispatches`). |
 | `SLACK_BOT_TOKEN` (Cloudflare copy) | Cloudflare Worker | `xoxb-…` — same Slack bot token as in GitHub Secrets. Used by Worker to mirror inbound webhook attempts to `SLACK_DEBUG_CHANNEL`. Optional; if unset, Slack debug logging silently no-ops. |
+| `BACKFILL_TOKEN` | Cloudflare Worker **and** GitHub repo Secrets | Random URL-safe token. Worker copy guards `/backfill` endpoint (timing-safe compare). GitHub copy is read by `post-backfill-button.yml` / `update-backfill-button.yml` to construct the button URL. Must be identical. Rotate per §7.1. |
+| `BACKFILL_WORKER_URL` | GitHub repo Secrets | Base URL of the Cloudflare Worker (e.g. `https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev`). Used by the post-button workflow to construct the bookmark/button URL. |
 
 Lookup/rotate commands:
 
@@ -163,43 +167,56 @@ claude setup-token   # prints new sk-ant-oat01-... → put in CLAUDE_CODE_OAUTH_
 - `scheduled_start_time` — ISO8601
 - `calendar_invitees_domains_type` — "one_or_more_external" or "all_internal" (filter exits if not external)
 
-**Max-turns:** 120. **Timeout:** 35 minutes.
+**Max-turns:** 140 (80 → 120 for the 8-block card; → 140 on 2026-09-03 for the BANT / questions-log / value-check sections).
+**Timeout:** 35 minutes.
 
 ### 5.1 Slack output layout (the "exact flow")
 
 One main message + one quote thread reply + 5–10 video clip thread replies. Channel `C0APW8DSA4R` only.
 
-**Main post — 8 blocks (in order):**
+**Main post — 10 blocks (in order; block 6 omitted when there are no open questions):**
 
-1. `header` — `:hospital: {Practice} — {Lead Person} ({Their Role})` (use literal 🏥; headers don't render shortcodes)
-2. `section` with 4 fields: `*Practice*`, `*Date*`, `*Signal*` (with `:large_green_circle:` / `:large_yellow_circle:` / `:red_circle:`), `*Themes*` (dot-separated)
-3. `section` — `*Attendees:* {names+roles} | *Source:* {Will's|Caitlin's|Ellena's} Fathom`
-4. `section` — one-line practice profile (`{patients} · {contracts} · {clinical system note}`)
-5. `section` — `*Key Takeaways*` (3 numbered, signal-relevance only)
-6. `section` — `:speech_balloon: *Dream Solution*` with 2 verbatim `>` blockquotes
-7. `section` — `*Ideal Features*` (5 bullets, `{urgency-emoji} {Feature} — {urgency} | {status}`, red→yellow→green)
-8. `actions` — two buttons: `Open in Notion` (primary, `$NOTION_URL`) and `Watch on Fathom` (`$SHARE_URL`)
+1. `header` — `:hospital: {Practice} — {Lead Person} ({Their Role})` (use literal 🏥, headers don't render shortcodes)
+2. `section` with 4 fields: `*Practice*`, `*Date*` (human-readable), `*Signal*` (with `:large_green_circle:` / `:large_yellow_circle:` / `:red_circle:`), `*Themes*` (dot-separated)
+3. `section` — `*Attendees:* {names with roles} | *Source:* {Will's|Caitlin's|Ellena's} Fathom`
+4. `section` — one-line practice profile (patient count · contracts · clinical system note)
+5. `section` — `:dart: *BANT — N/4 qualified*` with 4 fields `Budget` / `Authority` / `Need` / `Timeframe`, one line each, prefixed `:white_check_mark:` / `:large_yellow_circle:` / `:x:`. "Not discussed — ask next time" when the call didn't cover it.
+6. `context` — `:question: *N client question(s) we couldn't answer on the call* — list is in Notion`. **Count only**, never the questions. Omitted when N = 0.
+7. `section` — `*Key Takeaways*` (3 numbered, signal-relevance only)
+8. `section` — `:speech_balloon: *Dream Solution*` with 2 verbatim `>` blockquotes
+9. `section` — `*Ideal Features*` (5 bullets, each `{urgency-emoji} {Feature} — {urgency} | {status}`, ordered red→yellow→green)
+10. `actions` — two buttons: `Open in Notion` (primary, `$NOTION_URL`) and `Watch on Fathom` (`$SHARE_URL`)
 
-**Thread reply 1 — 10 quotes** grouped: `:red_circle: ×3` (Problems) · `:star: ×3` (Dream) · `:fire: ×2` (Reaction) · `:zap: ×2` (Powerful). Each quote verbatim with `<URL?timestamp=SECS|Watch>`.
+**Public vs private split (added 2026-09-03):** Slack is the public view — BANT summary and an unanswered-question *count*. The Notion page (less public) opens with four commercial sections above the product-discovery analysis:
 
-**Thread replies 2–N — 5 to 10 video clips** uploaded as Slack file attachments. Each captioned `:one:…:ten: _"{quote}"_ — {Speaker}`. Clips are 20s windows starting at `TS-5`.
+1. **BANT Qualification** — 4 bullets with verbatim evidence + Watch links, then `BANT score: N/4 qualified`
+2. **Questions we couldn't answer** — red ❓ callout listing every UNANSWERED client question (question — who asked — Watch link)
+3. **Client Questions Log** — table of *every* question an external attendee asked: #, Question (Watch-linked), Asked by, Our answer (≤15 words), Status (✅ Answered / 🟡 Partial / ❌ Unanswered). UNANSWERED = we said "I'll check / not sure / good question", deferred it, or moved on without answering.
+4. **Value & Financial Savings** — `Verdict:` one of `Financial savings` (we quantified £ / WTE / QOF income) · `Non-financial only` (time, admin, safety but no numbers) · `Not discussed`; evidence quotes; practice reaction; 💷 coaching callout with what we should have said (omitted when verdict is `Financial savings`).
+
+Two Partner Meeting Library properties back this so it's filterable: `Value Discussed` (select, same three values) and `Open Questions` (number = count of UNANSWERED rows).
+
+**Thread reply 1 — 10 quotes** grouped by category:
+`:red_circle: Problems ×3` · `:star: Dream ×3` · `:fire: Reaction ×2` · `:zap: Powerful ×2`. Each quote is verbatim with a `<URL?timestamp=SECS|Watch>` link.
+
+**Thread replies 2–N — video clips** (5–10) uploaded as Slack file attachments, each captioned `:one:…:ten: _"{quote}"_ — {Speaker}`. Clips are 20s windows starting `TS-5`.
 
 ### 5.2 Clip selection criteria
 
-Strict priority, descending only if higher tiers exhausted:
-1. **Praise** — visceral explicit enthusiasm / buy signal (no lukewarm politeness)
+Strict priority, descending only when higher tiers exhausted:
+1. **Praise** — visceral explicit enthusiasm or buy-signal (not lukewarm politeness)
 2. **Feature** — direct capability requests (not meta scheduling questions)
 3. **Problem** — multi-sentence pain with specifics (not one-liner gripes)
 
-Density over volume. Lead with praise, then features, then problems. At least 1 tier-3. Narrative `:one:`–`:ten:` follow chronological occurrence in the recording.
+Density over volume. Lead with praise, then features, then problems. At least 1 tier-3 for context. Narrative `:one:`…`:ten:` prefixes follow chronological occurrence.
 
 ### 5.3 Where each part is produced
 
-- Steps 1–5 (transcript → analysis → Notion → main post → quote thread) — `anthropics/claude-code-action@v1`
+- Steps 1–5 (transcript → analysis → Notion → main post → quote thread) — `anthropics/claude-code-action@v1` (Claude Code, subscription-funded)
 - Step 6 — Claude writes `/tmp/clips.json` only (manifest of selected clips); no ffmpeg, no Slack uploads
-- "Upload video clips from manifest" step — deterministic bash: probes `$SHARE_URL/video.m3u8`, then for each clip in the manifest runs `ffmpeg -ss $((TS-5)) -t 20 …` and `files.getUploadURLExternal` + PUT + `files.completeUploadExternal` with `thread_ts`. Prints `CLIP_SUMMARY: uploaded=N of M, probe_status=…` to the GH log. Posts a `:rotating_light:` thread reply if probe passed but upload count is zero.
+- "Upload video clips from manifest" workflow step — deterministic bash. Probes `$SHARE_URL/video.m3u8` → for each clip: `ffmpeg -ss $((TS-5)) -t 20 …` → Slack `files.getUploadURLExternal` + PUT + `files.completeUploadExternal` with `thread_ts`. Prints `CLIP_SUMMARY: uploaded=N of M, probe_status=…` to the GH log. Posts a `:rotating_light:` thread reply if probe passed but upload count is zero.
 
-This split exists because Claude was reliably skipping the clip step inside the action when the prompt got long — bash gives a deterministic, debuggable, GH-log-visible upload path.
+This split exists because Claude was reliably skipping the clip step inside the action when the prompt got long — bash gives us a deterministic, debuggable, GH-log-visible upload path.
 
 ---
 
@@ -207,38 +224,62 @@ This split exists because Claude was reliably skipping the clip step inside the 
 
 Pure bash. Queries Fathom Will + Caitlin + Ellena directly for last-24h external meetings, counts Planner mentions per transcript, posts a reconciliation list to Slack. Independent of the webhook pipeline.
 
-**Status:** cron disabled 2026-05-15 (`workflow_dispatch` only). Default-off because the auto-fire pipeline + the daily backfill sweep (§7) already cover this.
+**Status:** cron disabled 2026-05-15 (`schedule:` removed; `workflow_dispatch` only). Use `gh workflow run watchdog.yml` if you ever want to eyeball today's meetings vs what landed. Default-off because the auto-fire pipeline + the daily backfill sweep (§7) already cover this.
 
 ---
 
 ## 7. Workflow: fire-unprocessed.yml — manual + scheduled backfill
 
-One-click catch-up sweep. Scans the most recent ~50 external meetings per Fathom account (Will/Caitlin/Ellena ≈ several months of history), cross-references against Notion's Partner Meeting Library by Meeting ID, and fires `repository_dispatch` for each gap. Notion dedup makes it idempotent.
+One-click catch-up sweep. Scans the most recent ~50 external meetings per Fathom account (Will/Caitlin/Ellena ≈ several months of history), cross-references against Notion's Partner Meeting Library by Meeting ID, and fires `repository_dispatch` for each meeting that isn't already there. Notion dedup makes it idempotent.
 
 **Triggers (three):**
-- **Daily cron** at `0 16 * * *` (16:00 UTC ≈ 17:00 BST in summer / 16:00 GMT in winter)
-- **Slack button / browser bookmark** — clicks a URL on the Cloudflare Worker (`/backfill?token=…`) which POSTs `repository_dispatch` with `event_type: fathom_manual_backfill`
-- **`gh workflow run fire-unprocessed.yml`**
+- **Daily cron** at `0 16 * * *` (16:00 UTC ≈ 17:00 BST in summer / 16:00 GMT in winter) — fires automatically
+- **Slack button / browser bookmark** — clicks an HTML URL on the Cloudflare Worker that POSTs `repository_dispatch` with `event_type: fathom_manual_backfill`
+- **`gh workflow run fire-unprocessed.yml`** — terminal
 
 **Slack output policy:**
-- Gaps found → posts `:zap: Manual backfill: fired N missed meetings` with a bulleted list. Each meeting then lands as a full 8-block + thread + clips ~15 min later.
-- No gaps → **silent**. Channel stays quiet on healthy days.
+- If gaps found → posts `:zap: Manual backfill: fired N missed meetings.` with a bulleted list (each meeting then lands as a full 10-block + thread + clips ~15 min later via the standard pipeline)
+- If no gaps → **silent** (no Slack post). GH Actions run log is the audit trail. Keeps `#partner-meetings` quiet on healthy days.
 
 ### 7.1 The Slack button + browser bookmark
 
-URL on the Cloudflare Worker:
+A single URL on the Cloudflare Worker triggers the sweep:
+
 ```
 https://fathom-webhook.athom-webhookwill-gaoworkersdev.workers.dev/backfill?token=<BACKFILL_TOKEN>
 ```
 
-Worker endpoint (`src/worker.ts`):
-- `GET /backfill?token=…` — timing-safe token check, then POSTs `repository_dispatch` to the same repo with `event_type: fathom_manual_backfill`. Reuses existing `GITHUB_PAT` (`Contents: Read+Write` only — no new scope needed).
+The token is held as a Worker secret (`BACKFILL_TOKEN`) and as a GH secret (`BACKFILL_TOKEN`, used by the post-button workflow to construct the URL). Bookmark this URL or click the pinned Slack button in `C0APW8DSA4R`. The browser tab shows a green "Backfill triggered" page; Slack gets a follow-up only if there were gaps.
 
-Operational workflows:
-- `post-backfill-button.yml` — post a fresh pinned button to `C0APW8DSA4R`
-- `update-backfill-button.yml` (input: `message_ts`) — edit the existing pinned button via `chat.update` (use after rotating token or changing description)
+**Worker endpoint** (`src/worker.ts`):
+- `GET /backfill?token=…` — verifies token (timing-safe), POSTs `repository_dispatch` to GitHub with `event_type: fathom_manual_backfill`, returns an HTML success page
+- Reuses the same `GITHUB_PAT` already configured for the live webhook path (no new PAT scope needed — `repository_dispatch` only requires `Contents: Read+Write`)
 
-Rotating the token: regenerate, push to both Cloudflare (`wrangler secret put BACKFILL_TOKEN`) and GitHub (`gh secret set BACKFILL_TOKEN`), then re-post or update the Slack button.
+**Re-posting the Slack button** (if you delete it accidentally):
+```bash
+gh workflow run post-backfill-button.yml
+```
+Then re-pin the message in Slack (⋯ → Pin to channel).
+
+**Updating the pinned button text in-place** (URL unchanged, message stale):
+```bash
+gh workflow run update-backfill-button.yml -f message_ts=<TS>
+```
+Where `<TS>` is the message ts from `chat.postMessage`'s response (e.g. `1778859623.872379`).
+
+**Rotating the token:**
+```bash
+# 1. Generate new
+NEW=$(node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))")
+# 2. Push to Cloudflare
+cd "$HOME/Platform <> Commercial Sync/automation/fathom-webhook"
+echo "$NEW" | npx wrangler secret put BACKFILL_TOKEN
+# 3. Push to GH (used to construct button URL in post/update workflows)
+cd "$HOME/Platform <> Commercial Sync/automation/suvera-automation"
+gh secret set BACKFILL_TOKEN --body "$NEW"
+# 4. Re-post button with new URL
+gh workflow run update-backfill-button.yml -f message_ts=<TS>
+```
 
 ---
 
@@ -399,26 +440,25 @@ gh run watch $(gh run list --workflow=watchdog.yml --limit 1 --json databaseId -
 
 ### 10.4 Live Worker diagnostics
 
-Slack debug mirroring is **disabled by default** (`SLACK_DEBUG_CHANNEL=""` in `wrangler.toml`, 2026-05-18). To diagnose Worker activity live:
+Slack debug mirroring is **disabled by default** (`SLACK_DEBUG_CHANNEL=""` in `wrangler.toml`, 2026-05-18). The channel stays quiet except for meeting cards and manual backfill summaries. To diagnose Worker activity live:
 
 ```bash
 cd "$HOME/Platform <> Commercial Sync/automation/fathom-webhook"
-npx wrangler tail
+npx wrangler tail   # streams every inbound request with console.log lines
 ```
 
-To temporarily re-enable Slack mirroring: set `SLACK_DEBUG_CHANNEL = "C0APW8DSA4R"` in `wrangler.toml`, `npx wrangler deploy`, observe, then revert.
+To temporarily re-enable Slack mirroring (e.g. for a half-day investigation): set `SLACK_DEBUG_CHANNEL = "C0APW8DSA4R"` in `wrangler.toml`, `npx wrangler deploy`, observe, then revert.
 
 ### 10.5 Does Fathom → real production work?
-Ultimate test: have a short Fathom meeting with one external invitee where "Planner" is mentioned 3+ times. End the meeting, wait ~15 min. Expected:
+Ultimate test: have a short Fathom meeting with one external invitee where "recall" is mentioned ≥1 time (or the title contains "planner"/"recall"). End the meeting, wait ~15 min. Expected:
 - New Notion page in Partner Meeting Library
-- New Slack main post in `#partner-meetings`
-- Slack thread with 10 quotes + up to 10 clips
+- 10-block main card + thread + clips in `#partner-meetings`
 
 If nothing appears within 30 min, check in order:
-1. Slack `C0APW8DSA4R` — did the Worker post a `:white_check_mark:`/`:warning:`/`:rotating_light:` line? If silent, Fathom never delivered (check Fathom webhook config).
-2. `npx wrangler tail` — for live trace if Slack mirror is misbehaving.
-3. `gh run list --repo Will-Suvera/suvera-automation --limit 5` — did a `repository_dispatch` fire?
-4. Click into that run — did it exit quietly because of a filter, or fail?
+1. `npx wrangler tail` — live Worker output (does the inbound POST hit, does signature verify, does dispatch fire?)
+2. `gh run list --repo Will-Suvera/suvera-automation --limit 5` — did a `repository_dispatch` fire?
+3. Click into that run — did it exit quietly because of a filter, or fail?
+4. Temporarily flip `SLACK_DEBUG_CHANNEL` back on if you need passive observation without a terminal.
 
 ---
 

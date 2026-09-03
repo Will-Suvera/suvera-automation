@@ -72,7 +72,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Grep,Glob
-            --max-turns 120
+            --max-turns 140
           prompt: |
             You are processing ONE specific Fathom meeting that just ended. All
             metadata is in environment variables. Do NOT poll Fathom for other
@@ -143,6 +143,75 @@ jobs:
             - Product Implications — 5 to 8 actionable bullets.
             - 14 Discovery Questions — 2-3 sentences each.
 
+            Plus THREE commercial sections (all go to Notion; BANT also
+            goes to Slack). Evidence-only — every claim must trace to
+            something actually said on the call. If the call didn't
+            cover it, write "Not discussed" rather than guessing.
+
+            - BANT Qualification — one entry per letter:
+                Budget    — is there money / a budget holder / a funding
+                            route (practice funds, PCN, ARRS, ICB)? Any
+                            price reaction? "Not discussed" if none.
+                Authority — who on the call can sign? Who else must
+                            approve (partners meeting, PCN board, PM)?
+                Need      — the core problem in ONE line, and how acute
+                            (nice-to-have vs burning).
+                Timeframe — when do they want to be live, any hard dates
+                            (QOF year-end, contract renewal, staff
+                            leaving, ARRS deadline)? "Not discussed" if none.
+              Each entry: 1-2 sentences, then a verbatim quote with a
+              Watch link if one exists. Then an overall BANT score
+              "N/4 qualified" — count a letter only if there is real
+              evidence for it (Need almost always counts; Budget
+              rarely does on a first call).
+
+            - Client Questions Log — EVERY question asked by an external
+              attendee (practice / PCN / partner side), in the order
+              asked. Ignore questions from Suvera staff. Ignore pure
+              small talk ("can you hear me?"). Include product, pricing,
+              contract, data, integration, onboarding and "what if"
+              questions. For each row:
+                * the question, paraphrased tightly (verbatim if short)
+                * who asked (name + role)
+                * Watch link (${SHARE_URL}?timestamp=SECS)
+                * our answer in ≤15 words
+                * status: ANSWERED / PARTIAL / UNANSWERED
+              Mark UNANSWERED when the Suvera side: said "I'll check /
+              come back to you / not sure / good question / I'd have to
+              ask the team"; deferred it to someone else; changed topic
+              without answering; or never addressed it at all. Mark
+              PARTIAL when we answered vaguely or only part of it.
+              Typically 5-20 questions on a demo call — capture all of
+              them, don't cap the list. Count the UNANSWERED rows — this
+              number is $OPEN_QUESTIONS (used in Step 3b and Step 4).
+
+            - Value & Financial Savings Check — did WE (Suvera side)
+              articulate the value to the practice? Look specifically
+              for financial framing: QOF income protected or gained,
+              staff time / WTE saved, ARRS reimbursement, DNA reduction,
+              cost per patient, price vs a pharmacist or admin salary,
+              money-back guarantee, savings vs their current tool or
+              SMS spend. Record:
+                * Verdict — ONE of exactly:
+                    "Financial savings"  — we put a £ figure, a WTE/hours
+                                           figure, or a QOF-income figure
+                                           in front of them
+                    "Non-financial only" — we talked about value (time,
+                                           less admin, fewer missed
+                                           patients, patient safety) but
+                                           never quantified it in money
+                    "Not discussed"      — we didn't articulate value at all
+                * Evidence — 1-3 verbatim quotes with Watch links showing
+                  what was said (or a one-line note that nothing was said).
+                * Practice's reaction — did the value land? Any pushback
+                  on price or ROI?
+                * Gap — if verdict isn't "Financial savings", one line on
+                  what we SHOULD have said for this practice (e.g. list
+                  size × QOF points at risk, or hours/week they described
+                  × admin hourly rate). This is a coaching note, keep it
+                  concrete.
+              This verdict is $VALUE_DISCUSSED (used in Step 3b).
+
             ## Step 3: Notion page (REST API) — with dedup
 
             ### 3a. Check for existing entry first (dedup + race protection)
@@ -197,10 +266,49 @@ jobs:
               Stage (select) — Prospect / Onboarding / Live / Renewal / Churned
               Date (date) — { start: "$SCHEDULED_START", is_datetime: true } if the
                 property name is "Date" and supports datetime; otherwise adjust.
+              Value Discussed (select) — $VALUE_DISCUSSED, exactly one of:
+                "Financial savings" / "Non-financial only" / "Not discussed"
+              Open Questions (number) — $OPEN_QUESTIONS (count of UNANSWERED
+                client questions; 0 if none)
             Children: full markdown analysis rendered as Notion blocks (heading_2
             for sections, bulleted_list_item for bullets, quote for pull-quotes,
             paragraph for prose). Convert quote Watch links to inline links via
             the rich_text "link" field.
+
+            Section order on the page — the three commercial sections go
+            FIRST, above the product-discovery analysis, because that's
+            what the sales side opens the page for:
+              1. heading_2 "BANT Qualification" — 4 bulleted_list_item
+                 blocks (bold the letter label via rich_text annotations),
+                 then a paragraph "BANT score: N/4 qualified".
+              2. heading_2 "Questions we couldn't answer" — a callout
+                 block (emoji "❓", red_background) containing one line
+                 per UNANSWERED question: question — who asked — Watch
+                 link. If there are none, the callout says "None — every
+                 client question was answered on the call." This sits
+                 above the full log so it's the first thing seen.
+              3. heading_2 "Client Questions Log" — a table block (has_
+                 column_header true, 5 columns: #, Question, Asked by,
+                 Our answer, Status). Status cell text: "✅ Answered" /
+                 "🟡 Partial" / "❌ Unanswered". Put the Watch link on
+                 the question text via rich_text "link". If the Notion
+                 table block 400s for any reason, fall back to
+                 bulleted_list_item rows in the same order — never drop
+                 the questions.
+              4. heading_2 "Value & Financial Savings" — paragraph
+                 "Verdict: {verdict}" (bold), then quote blocks for the
+                 evidence, then a paragraph "Practice reaction: …", then
+                 a callout (emoji "💷", yellow_background) with the Gap
+                 coaching note (omit the callout if verdict is
+                 "Financial savings").
+              5. Then a divider, then the existing analysis sections
+                 (Problem Statement onwards) unchanged.
+
+            Notion caps a single pages.create at 100 child blocks (table
+            rows count as children of the table). If the page needs more,
+            create it with the first ~90 blocks, then append the rest via
+            PATCH /v1/blocks/$NOTION_PAGE_ID/children in batches of ≤100.
+            Never silently truncate sections to fit.
 
             Capture the returned page id + url ($NOTION_URL below).
 
@@ -225,16 +333,22 @@ jobs:
             GET the data source schema first if a property 400s. Ledger
             failures must NOT block Steps 4-6 — log and continue.
 
-            ## Step 4: Slack main post (8-block card)
+            ## Step 4: Slack main post (10-block card)
             Channel C0APW8DSA4R. ONE chat.postMessage. Write JSON to
             /tmp/slack_main.json, POST via curl -d @file to
             https://slack.com/api/chat.postMessage with header
             "Authorization: Bearer $SLACK_BOT_TOKEN" and
             "Content-Type: application/json; charset=utf-8".
 
-            Use EXACTLY this block layout (8 blocks, in order). All
+            Use EXACTLY this block layout (10 blocks, in order; block 6
+            is omitted when there are no open questions, giving 9). All
             section text is mrkdwn. Capture the response "ts" — Steps 5
             and 6 will reply in-thread.
+
+            The Slack card is the PUBLIC view — it carries the BANT
+            summary and a COUNT of unanswered questions, but NOT the
+            questions themselves or the value/savings coaching note.
+            Those live only in Notion.
 
             Signal colour key (use the right circle emoji for the signal):
               :large_green_circle: High   |   :large_yellow_circle: Medium   |   :red_circle: Low
@@ -274,20 +388,43 @@ jobs:
               If a fact is genuinely unknown from the transcript, omit it —
               don't say "unknown". Keep this to ONE line, dot-separated.
 
-            Block 5 — section, Key Takeaways
+            Block 5 — section, BANT qualification (4 fields)
+              type: "section"
+              text: { type:"mrkdwn", text:":dart: *BANT — {N}/4 qualified*" }
+              fields: [
+                { type:"mrkdwn", text:"{b-emoji} *Budget*\n{one line}" },
+                { type:"mrkdwn", text:"{a-emoji} *Authority*\n{one line}" },
+                { type:"mrkdwn", text:"{n-emoji} *Need*\n{one line}" },
+                { type:"mrkdwn", text:"{t-emoji} *Timeframe*\n{one line}" }
+              ]
+              Each field is ONE line, ≤ 20 words, no quotes — the
+              evidence lives in Notion. Emoji per letter:
+                :white_check_mark: evidence on the call that this is in place
+                :large_yellow_circle: partially there / needs confirming
+                :x: not discussed, or evidence it's missing
+              For "Not discussed" letters write exactly "Not discussed —
+              ask next time". Order the fields B, A, N, T always.
+
+            Block 6 — context, open questions (OMIT if $OPEN_QUESTIONS is 0)
+              type: "context"
+              elements: [ { type:"mrkdwn",
+                text:":question: *{N} client question(s) we couldn't answer on the call* — list is in Notion, owner to follow up" } ]
+              Count only, never the questions themselves.
+
+            Block 7 — section, Key Takeaways
               type: "section"
               text: { type:"mrkdwn", text:"*Key Takeaways*\n1. {takeaway one}\n2. {takeaway two}\n3. {takeaway three}" }
               Three numbered takeaways. Each 1-2 sentences. Focus on
               signal-relevance (why this prospect matters, not generic facts).
 
-            Block 6 — section, Dream Solution (2 verbatim quotes)
+            Block 8 — section, Dream Solution (2 verbatim quotes)
               type: "section"
               text: { type:"mrkdwn",
                 text:":speech_balloon: *Dream Solution*\n> \"{verbatim quote 1}\"\n> \"{verbatim quote 2}\"" }
               Quotes must be verbatim from transcript. Quote-block markdown
               (`> `) per line. No attribution needed inside this block.
 
-            Block 7 — section, Ideal Features (5 bullets)
+            Block 9 — section, Ideal Features (5 bullets)
               type: "section"
               text: { type:"mrkdwn",
                 text:"*Ideal Features*\n• {urgency-emoji} {Feature name} — {High|Medium|Low} | {Live|In build|Roadmap|Gap}\n• ..." }
@@ -295,7 +432,7 @@ jobs:
               then green). Optional parenthetical detail after the feature name
               when it sharpens meaning (e.g. "PSA 6m, re-recall 3m post-med change").
 
-            Block 8 — actions, two buttons
+            Block 10 — actions, two buttons
               type: "actions"
               elements: [
                 { type:"button",
