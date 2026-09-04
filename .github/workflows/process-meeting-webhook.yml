@@ -270,6 +270,20 @@ jobs:
                 "Financial savings" / "Non-financial only" / "Not discussed"
               Open Questions (number) — $OPEN_QUESTIONS (count of UNANSWERED
                 client questions; 0 if none)
+              ODS Code / PCN / PCN ODS Code / ICB / ICB ODS Code (all
+                rich_text) — resolve BEFORE creating the page:
+                curl -sS "https://apptconfig.suvera.com/lookup?q=<practice name, URL-encoded>"
+                returns { "matches": [ { ods, name, address, postcode,
+                listSize, pcn, pcnOds, icb, icbOds } ] } from the NHS QOF
+                24/25 registry (all English practices). Pick the match whose
+                name and location fit the transcript — if several practices
+                share the name, use the town/area mentioned on the call to
+                choose (retry the lookup with the town or postcode appended
+                if needed). Fill ODS Code=ods, PCN=pcn, PCN ODS Code=pcnOds,
+                ICB=icb, ICB ODS Code=icbOds. If there is no confident match,
+                leave all five EMPTY — never guess an ODS code. If any of
+                these properties 400s (schema drift), drop that property and
+                continue.
             Children: full markdown analysis rendered as Notion blocks (heading_2
             for sections, bulleted_list_item for bullets, quote for pull-quotes,
             paragraph for prose). Convert quote Watch links to inline links via
