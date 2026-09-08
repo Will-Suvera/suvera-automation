@@ -151,19 +151,39 @@ jobs:
             - BANT Qualification — one entry per letter:
                 Budget    — is there money / a budget holder / a funding
                             route (practice funds, PCN, ARRS, ICB)? Any
-                            price reaction? "Not discussed" if none.
+                            price reaction? COMPARATIVE PROCUREMENT COUNTS:
+                            if the client is price-benchmarking us against
+                            named competitors, has other quotes in hand, or
+                            probes discount/credit mechanics, that IS budget
+                            evidence — someone shopping three vendors has a
+                            budget conversation underway. "Not discussed"
+                            only if none of the above.
                 Authority — who on the call can sign? Who else must
                             approve (partners meeting, PCN board, PM)?
                 Need      — the core problem in ONE line, and how acute
                             (nice-to-have vs burning).
                 Timeframe — when do they want to be live, any hard dates
                             (QOF year-end, contract renewal, staff
-                            leaving, ARRS deadline)? "Not discussed" if none.
+                            leaving, ARRS deadline)? A NAMED DECISION
+                            VENUE WITH A DATE COUNTS ("the partners meet
+                            on Friday") — and scan OUR side of the
+                            conversation too: the Suvera speaker often
+                            anchors offers to a date the client mentioned
+                            ("let's say you had your meeting on Friday"),
+                            which is timeframe evidence even if the client
+                            never states it in one clean sentence.
+                            "Not discussed" only if none of the above.
               Each entry: 1-2 sentences, then a verbatim quote with a
               Watch link if one exists. Then an overall BANT score
               "N/4 qualified" — count a letter only if there is real
-              evidence for it (Need almost always counts; Budget
-              rarely does on a first call).
+              evidence for it (Need almost always counts).
+              INDIRECT EVIDENCE IS FLAGGED, NOT DROPPED: when a letter
+              qualifies via inference (implied by our side of the call,
+              deduced from competitor comparison, or otherwise not stated
+              plainly by the client), still count it but end that bullet
+              with " ⚠️ inferred — confirm explicitly next call" so the
+              Notion page shows exactly which legs of the deal rest on
+              inference rather than the client's own words.
 
             - Client Questions Log — EVERY question asked by an external
               attendee (practice / PCN / partner side), in the order
