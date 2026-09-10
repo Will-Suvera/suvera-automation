@@ -26,6 +26,8 @@ jobs:
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
           FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
           # used for comparison so we can flag if a whsec drift exists for Will
           EXPECTED_WHSEC_WILL: ${{ secrets.FATHOM_WEBHOOK_SECRET_WILL }}
         run: |
@@ -92,6 +94,8 @@ jobs:
           check "Will"    "${FATHOM_WILL_KEY}"
           check "Caitlin" "${FATHOM_CAITLIN_KEY}"
           check "Ellena"  "${FATHOM_ELLENA_KEY}"
+          check "Ivan"    "${FATHOM_IVAN_KEY}"
+          check "Camilla" "${FATHOM_CAMILLA_KEY}"
 
           echo ""
           echo "Done. If all three show 'URL matches', Fathom is wired to deliver."

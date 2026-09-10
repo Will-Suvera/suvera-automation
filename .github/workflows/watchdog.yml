@@ -23,11 +23,13 @@ jobs:
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
           FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           set -eu
 
-          for v in FATHOM_WILL_KEY FATHOM_CAITLIN_KEY FATHOM_ELLENA_KEY SLACK_BOT_TOKEN; do
+          for v in FATHOM_WILL_KEY FATHOM_CAITLIN_KEY FATHOM_ELLENA_KEY FATHOM_IVAN_KEY FATHOM_CAMILLA_KEY SLACK_BOT_TOKEN; do
             if [ -z "${!v:-}" ]; then
               echo "::error::Missing secret: $v"
               exit 1
@@ -49,7 +51,9 @@ jobs:
           WILL=$(fetch_meetings "Will" "${FATHOM_WILL_KEY}")
           CAITLIN=$(fetch_meetings "Caitlin" "${FATHOM_CAITLIN_KEY}")
           ELLENA=$(fetch_meetings "Ellena" "${FATHOM_ELLENA_KEY}")
-          ALL=$(jq -n --argjson a "$WILL" --argjson b "$CAITLIN" --argjson c "$ELLENA" '$a + $b + $c')
+          IVAN=$(fetch_meetings "Ivan" "${FATHOM_IVAN_KEY}")
+          CAMILLA=$(fetch_meetings "Camilla" "${FATHOM_CAMILLA_KEY}")
+          ALL=$(jq -n --argjson a "$WILL" --argjson b "$CAITLIN" --argjson c "$ELLENA" --argjson d "$IVAN" --argjson e "$CAMILLA" '$a + $b + $c + $d + $e')
 
           echo "--- external meetings in last 24h ---"
           echo "$ALL" | jq '.'
@@ -70,6 +74,8 @@ jobs:
               Will)    KEY="${FATHOM_WILL_KEY}" ;;
               Caitlin) KEY="${FATHOM_CAITLIN_KEY}" ;;
               Ellena)  KEY="${FATHOM_ELLENA_KEY}" ;;
+              Ivan)    KEY="${FATHOM_IVAN_KEY}" ;;
+              Camilla) KEY="${FATHOM_CAMILLA_KEY}" ;;
             esac
 
             PLANNER_N=$(curl -sS -H "X-Api-Key: ${KEY}" \

@@ -38,6 +38,8 @@ jobs:
           FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
           FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
           FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,9 +73,11 @@ jobs:
             --argjson w "$(fetch_account will    "$FATHOM_WILL_KEY")" \
             --argjson c "$(fetch_account caitlin "$FATHOM_CAITLIN_KEY")" \
             --argjson e "$(fetch_account ellena  "$FATHOM_ELLENA_KEY")" \
-            '$w + $c + $e')
+            --argjson i "$(fetch_account ivan    "$FATHOM_IVAN_KEY")" \
+            --argjson m "$(fetch_account camilla "$FATHOM_CAMILLA_KEY")" \
+            '$w + $c + $e + $i + $m')
 
-          echo "Fathom returned $(echo "$ALL" | jq 'length') external meetings across all 3 accounts"
+          echo "Fathom returned $(echo "$ALL" | jq 'length') external meetings across all 5 accounts"
           echo "$ALL" | jq '.'
 
           # Paginate Notion to collect every Meeting ID currently in the
