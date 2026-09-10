@@ -472,7 +472,7 @@ jobs:
               then green). Optional parenthetical detail after the feature name
               when it sharpens meaning (e.g. "PSA 6m, re-recall 3m post-med change").
 
-            Block 10 — actions, two buttons
+            Block 10 — actions, three buttons
               type: "actions"
               elements: [
                 { type:"button",
@@ -481,8 +481,14 @@ jobs:
                   style:"primary" },
                 { type:"button",
                   text:{ type:"plain_text", text:"Watch on Fathom" },
-                  url:"$SHARE_URL" }
+                  url:"$SHARE_URL" },
+                { type:"button",
+                  text:{ type:"plain_text", text:"Dock.Us" },
+                  url:"https://apptconfig.suvera.com/dock?rid=$RID" }
               ]
+              The Dock.Us URL is a stable redirect — a parallel routine
+              creates the Dock workspace and the redirect resolves to it.
+              Always include the button exactly as above; never query Dock.
 
             Also set the top-level "text" field on the chat.postMessage call to
             the practice name (used as Slack notification preview). If the
@@ -824,108 +830,3 @@ jobs:
               -d "$ALERT_BODY" \
               https://slack.com/api/chat.postMessage > /dev/null
           fi
-
-      - name: Attach Dock workspace button
-        if: success()
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          DOCK_API_KEY: ${{ secrets.DOCK_API_KEY }}
-          DOCK_TEMPLATE_ID: ${{ vars.DOCK_TEMPLATE_ID }}
-        run: |
-          set -eu
-          CHANNEL="C0APW8DSA4R"
-          DOCK_API="https://api.dock.us/v1"
-
-          if [ -z "${DOCK_API_KEY:-}" ]; then
-            echo "DOCK_SUMMARY: no DOCK_API_KEY secret - skipping"
-            exit 0
-          fi
-          if [ ! -f /tmp/clips.json ]; then
-            echo "DOCK_SUMMARY: no clips.json - skipping"
-            exit 0
-          fi
-          PRACTICE=$(jq -r '.practice // empty' /tmp/clips.json)
-          MAIN_TS=$(jq -r '.main_ts // empty' /tmp/clips.json)
-          if [ -z "$PRACTICE" ] || [ -z "$MAIN_TS" ]; then
-            echo "DOCK_SUMMARY: manifest missing practice or main_ts - skipping"
-            exit 0
-          fi
-          dock() { curl -sS -H "Authorization: Bearer ${DOCK_API_KEY}" -H "Content-Type: application/json" "$@"; }
-          P_LOWER=$(echo "$PRACTICE" | tr '[:upper:]' '[:lower:]')
-
-          # 1. Look for an existing workspace whose name or account matches the practice
-          WS_URL=""
-          PAGE=1
-          while [ "$PAGE" -le 5 ]; do
-            RESP=$(dock "${DOCK_API}/workspaces?page=${PAGE}&limit=100")
-            MATCH=$(echo "$RESP" | jq -r --arg p "$P_LOWER" '
-              [.data.workspaces[]? | select(
-                ((.name // "") | ascii_downcase | contains($p)) or
-                ((.account.name // "") | ascii_downcase | contains($p)) or
-                ($p | contains((.account.name // "zzznever") | ascii_downcase))
-              )] | first | .workspaceUrl // empty')
-            if [ -n "$MATCH" ]; then WS_URL="$MATCH"; break; fi
-            HAS_NEXT=$(echo "$RESP" | jq -r '.data.pageInfo.hasNextPage // false')
-            [ "$HAS_NEXT" = "true" ] || break
-            PAGE=$((PAGE + 1))
-          done
-
-          # 2. None found: create account + workspace from the proposal template
-          if [ -z "$WS_URL" ] && [ -n "${DOCK_TEMPLATE_ID:-}" ]; then
-            OWNER_ID=$(dock "${DOCK_API}/accounts?page=1&limit=1" | jq -r '.data.accounts[0].ownerId // empty')
-            ACCT_BODY=$(jq -nc --arg n "$PRACTICE" --arg o "$OWNER_ID" \
-              '{name:$n, logo:"https://assets.nhs.uk/images/nhs-logo.png"} + (if $o != "" then {ownerId:$o} else {} end)')
-            ACCT_ID=$(dock -X POST -d "$ACCT_BODY" "${DOCK_API}/accounts" | jq -r '.data.account.id // .id // empty')
-            if [ -n "$ACCT_ID" ]; then
-              WS_BODY=$(jq -nc --arg n "Sales Proposal for ${PRACTICE}" --arg a "$ACCT_ID" --arg t "$DOCK_TEMPLATE_ID" \
-                '{name:$n, accountId:$a, templateId:$t}')
-              WS_RESP=$(dock -X POST -d "$WS_BODY" "${DOCK_API}/workspaces")
-              WS_URL=$(echo "$WS_RESP" | jq -r '.data.workspace.workspaceUrl // empty')
-              WS_ID=$(echo "$WS_RESP" | jq -r '.data.workspace.id // empty')
-              echo "Created Dock workspace ${WS_ID:-?} for ${PRACTICE}"
-              # Personalise title pages: swap the template's XXXXX placeholder for the practice name
-              if [ -n "$WS_ID" ]; then
-                dock "${DOCK_API}/workspaces/${WS_ID}/pages" | jq -r '.data.workspacePages[]? | select(.name | contains("XXXXX")) | .id + "\t" + .name' \
-                | while IFS=$'\t' read -r PID PNAME; do
-                    NEW_NAME=$(echo "$PNAME" | sed "s/XXXXX/${PRACTICE}/g")
-                    dock -X PATCH -d "$(jq -nc --arg n "$NEW_NAME" '{name:$n}')" \
-                      "${DOCK_API}/workspaces/${WS_ID}/pages/${PID}" > /dev/null || true
-                    echo "  renamed page: ${PNAME} -> ${NEW_NAME}"
-                  done
-              fi
-            else
-              echo "DOCK_SUMMARY: account create failed - no button added"
-              exit 0
-            fi
-          fi
-
-          if [ -z "$WS_URL" ]; then
-            echo "DOCK_SUMMARY: no workspace found and no DOCK_TEMPLATE_ID to create one - skipping"
-            exit 0
-          fi
-
-          # 3. Add the Dock.Us button to the main card (chat.update using the blocks we posted)
-          if [ -f /tmp/slack_main.json ]; then
-            UPDATE_BODY=$(jq -c --arg ch "$CHANNEL" --arg ts "$MAIN_TS" --arg url "$WS_URL" '
-              .channel = $ch | .ts = $ts |
-              .blocks = (.blocks | map(
-                if .type == "actions"
-                then .elements += [{type:"button", text:{type:"plain_text", text:"Dock.Us"}, url:$url}]
-                else . end))' /tmp/slack_main.json)
-            UP=$(curl -sS -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-              -H "Content-Type: application/json; charset=utf-8" \
-              -d "$UPDATE_BODY" https://slack.com/api/chat.update)
-            if [ "$(echo "$UP" | jq -r '.ok')" = "true" ]; then
-              echo "DOCK_SUMMARY: button added to main card -> ${WS_URL}"
-              exit 0
-            fi
-            echo "chat.update failed: $(echo "$UP" | jq -r '.error // "unknown"') - falling back to thread reply"
-          fi
-          # Fallback: thread reply with the button
-          REPLY=$(jq -nc --arg ch "$CHANNEL" --arg ts "$MAIN_TS" --arg url "$WS_URL" --arg p "$PRACTICE" \
-            '{channel:$ch, thread_ts:$ts, text:("Dock workspace: " + $url),
-              blocks:[{type:"section", text:{type:"mrkdwn", text:(":globe_with_meridians: *Dock workspace for " + $p + "*")}},
-                      {type:"actions", elements:[{type:"button", text:{type:"plain_text", text:"Dock.Us"}, url:$url}]}]}')
-          curl -sS -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$REPLY" https://slack.com/api/chat.postMessage | jq -r '"DOCK_SUMMARY: thread-reply button -> ok=" + (.ok|tostring)'
