@@ -500,8 +500,10 @@ jobs:
             Then save it to the Notion page so later automation can find
             this Slack card: PATCH https://api.notion.com/v1/pages/$NOTION_PAGE_ID
             with properties { "Slack TS": { "rich_text": [{ "type":"text",
-            "text": { "content": "$MAIN_TS" } }] } }. If the property 400s
-            (schema drift), log and continue — never block on this.
+            "text": { "content": "$MAIN_TS" } }] }, "Fathom Account":
+            { "rich_text": [{ "type":"text", "text": { "content": "$ACCOUNT" } }] } }.
+            If a property 400s (schema drift), log and continue — never
+            block on this.
 
             ## Step 5: Thread reply — 10 key quotes
             POST chat.postMessage to channel C0APW8DSA4R with
