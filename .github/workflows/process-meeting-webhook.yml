@@ -670,6 +670,17 @@ jobs:
             PCNs. Partners are GP Practices and PCNs. Internal meetings and
             non-Planner product lines are out of scope.
 
+      - name: Move HubSpot deal to Proposal Sent
+        # Deterministic, no Claude. Forward-only; never fails the job.
+        if: success()
+        continue-on-error: true
+        env:
+          RID: ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python3 .github/scripts/hubspot_move_deal.py --rid "$RID"
+
       - name: Upload video clips from manifest
         if: success()
         env:
