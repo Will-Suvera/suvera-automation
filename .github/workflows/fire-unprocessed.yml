@@ -51,6 +51,12 @@ jobs:
           # meetings per account (Fathom returns newest first). Notion
           # dedup catches anything already processed, so the actual
           # work scales with the *gap*, not the window size.
+          # Only chase meetings from the last 7 days. Without this floor a
+          # newly added Fathom account (e.g. Camilla, Sep 2026) would replay
+          # months of old meetings as brand-new Slack cards, Dock proposals
+          # and HubSpot moves. Older gaps are handled by hand.
+          SINCE=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          echo "Only firing meetings scheduled since $SINCE"
           fetch_account() {
             local account=$1 key=$2
             if [ -z "$key" ]; then
@@ -59,9 +65,10 @@ jobs:
             fi
             curl -sS -H "X-Api-Key: $key" \
               "https://api.fathom.ai/external/v1/meetings?limit=50&include_summary=false" \
-              | jq --arg account "$account" \
+              | jq --arg account "$account" --arg since "$SINCE" \
                 '[.items[]?
                   | select(.calendar_invitees_domains_type == "one_or_more_external")
+                  | select((.scheduled_start_time // "") >= $since)
                   | {account: $account,
                      rid: (.recording_id|tostring),
                      title: .title,
