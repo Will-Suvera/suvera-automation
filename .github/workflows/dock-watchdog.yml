@@ -1,72 +1,34 @@
-# Independent monitor for the Dock workspace builder (the cloud routine
-# "Dock workspace for new partner meetings"). No Claude involved: if a meeting
-# card has waited over 90 minutes without a Dock workspace, or the builder marked
-# it failed, post once in that meeting's Slack thread and mark it alerted.
-# If this job itself fails (Notion/Slack down), GitHub emails the repo owner.
+# Independent safety net for the Dock workspace builder (cloud routine
+# "Dock workspace for new partner meetings"). No Claude involved.
+#
+# Primary trigger is EVENT-DRIVEN, not a clock: every time "Process meeting
+# (webhook)" finishes, this waits 90 minutes, then checks that each recent
+# meeting card got its Dock workspace, posting once in the meeting's Slack
+# thread if not. (11 Sep 2026: GitHub's cron on this repo ran hours late or
+# never, and Cloudflare Cron Triggers on the account never fired, so no
+# scheduler is relied on.) The public repo means the wait costs nothing.
+# The cron / Cloudflare dispatch / manual triggers remain as extra sweeps.
 name: Dock watchdog
 on:
-  # Cloudflare cron (fathom-webhook worker) is the reliable clock; GitHub's
-  # own schedule stays as a backup (it runs late on this repo). Idempotent.
+  workflow_run:
+    workflows: ["Process meeting (webhook)"]
+    types: [completed]
   repository_dispatch:
     types: [dock_watchdog]
   schedule:
     - cron: "7,37 * * * *"
   workflow_dispatch:
-concurrency:
-  group: dock-watchdog
-  cancel-in-progress: false
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 100
     steps:
+      - uses: actions/checkout@v4
+      - name: Give the builder 90 minutes after a meeting is processed
+        if: github.event_name == 'workflow_run'
+        run: sleep 5400
       - name: Alert on meetings still missing a Dock workspace
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        run: |
-          python3 - <<'EOF'
-          import os, json, urllib.request, datetime as dt
-          DS = "8115f0ee-00c8-488a-a05b-57726af0acf4"   # Partner Meeting Library
-          CHANNEL = "C0APW8DSA4R"
-          N = {"Authorization": "Bearer " + os.environ["NOTION_TOKEN"],
-               "Notion-Version": "2025-09-03", "Content-Type": "application/json"}
-          S = {"Authorization": "Bearer " + os.environ["SLACK_BOT_TOKEN"],
-               "Content-Type": "application/json; charset=utf-8"}
-          def call(url, body=None, headers=N, method=None):
-              r = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(),
-                                         headers=headers, method=method or ("GET" if body is None else "POST"))
-              with urllib.request.urlopen(r, timeout=30) as x:
-                  return json.loads(x.read())
-          def text(p):
-              if not p: return ""
-              v = p.get(p["type"])
-              return "".join(t.get("plain_text", "") for t in v) if isinstance(v, list) else (v or "")
-          now = dt.datetime.now(dt.timezone.utc)
-          q = call(f"https://api.notion.com/v1/data_sources/{DS}/query", {
-              "page_size": 50,
-              "filter": {"and": [
-                  {"property": "Slack TS", "rich_text": {"is_not_empty": True}},
-                  {"property": "Dock Workspace", "url": {"is_empty": True}},
-                  {"timestamp": "created_time", "created_time": {"after": (now - dt.timedelta(hours=72)).isoformat()}}]}})
-          alerted = 0
-          for pg in q["results"]:
-              pr = pg["properties"]
-              status = text(pr.get("Dock Status"))
-              age = (now - dt.datetime.fromisoformat(pg["created_time"].replace("Z", "+00:00"))).total_seconds() / 60
-              if "watchdog alerted" in status or not (age > 90 or status.startswith("failed")):
-                  continue
-              practice = text(pr.get("Practice")) or text(pr.get("Meeting"))
-              reason = status if status.startswith("failed") else "no workspace after %d minutes" % age
-              res = call("https://slack.com/api/chat.postMessage", {
-                  "channel": CHANNEL, "thread_ts": text(pr.get("Slack TS")),
-                  "text": f":warning: The Dock workspace for *{practice}* hasn't been built automatically ({reason}). Will, this one needs a look."},
-                  headers=S)
-              print(practice, "| slack ok" if res.get("ok") else f"| slack error {res.get('error')}")
-              stamp = (status + " | " if status else "") + "watchdog alerted " + now.strftime("%Y-%m-%dT%H:%MZ")
-              call(f"https://api.notion.com/v1/pages/{pg['id']}",
-                   {"properties": {"Dock Status": {"rich_text": [{"type": "text", "text": {"content": stamp[:1900]}}]}}},
-                   method="PATCH")
-              alerted += 1
-          print(f"{len(q['results'])} meeting(s) awaiting a workspace, {alerted} newly alerted")
-          EOF
+        run: python3 .github/scripts/dock_watchdog.py --min-age 90
