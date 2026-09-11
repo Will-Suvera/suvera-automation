@@ -1,6 +1,6 @@
 # Independent monitor for the Dock workspace builder (the cloud routine
 # "Dock workspace for new partner meetings"). No Claude involved: if a meeting
-# card has waited over an hour without a Dock workspace, or the builder marked
+# card has waited over 90 minutes without a Dock workspace, or the builder marked
 # it failed, post once in that meeting's Slack thread and mark it alerted.
 # If this job itself fails (Notion/Slack down), GitHub emails the repo owner.
 name: Dock watchdog
@@ -50,7 +50,7 @@ jobs:
               pr = pg["properties"]
               status = text(pr.get("Dock Status"))
               age = (now - dt.datetime.fromisoformat(pg["created_time"].replace("Z", "+00:00"))).total_seconds() / 60
-              if "watchdog alerted" in status or not (age > 60 or status.startswith("failed")):
+              if "watchdog alerted" in status or not (age > 90 or status.startswith("failed")):
                   continue
               practice = text(pr.get("Practice")) or text(pr.get("Meeting"))
               reason = status if status.startswith("failed") else "no workspace after %d minutes" % age
