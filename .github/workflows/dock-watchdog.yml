@@ -5,6 +5,10 @@
 # If this job itself fails (Notion/Slack down), GitHub emails the repo owner.
 name: Dock watchdog
 on:
+  # Cloudflare cron (fathom-webhook worker) is the reliable clock; GitHub's
+  # own schedule stays as a backup (it runs late on this repo). Idempotent.
+  repository_dispatch:
+    types: [dock_watchdog]
   schedule:
     - cron: "7,37 * * * *"
   workflow_dispatch:

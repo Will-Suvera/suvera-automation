@@ -14,7 +14,10 @@ name: Fire backfill for any missed meetings
 on:
   workflow_dispatch: {}
   repository_dispatch:
-    types: [fathom_manual_backfill]
+    # fathom_manual_backfill = Slack button / bookmark (posts a summary)
+    # fathom_scheduled_backfill = Cloudflare cron at 16:00 UTC (silent), the
+    # reliable clock since GitHub's schedule below runs hours late or skips.
+    types: [fathom_manual_backfill, fathom_scheduled_backfill]
   schedule:
     # 16:00 UTC daily = 17:00 BST in summer, 16:00 GMT in winter.
     # Aim is "end-of-UK-workday catch-up" — catches anything that
@@ -44,6 +47,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_ACTION: ${{ github.event.action }}
         run: |
           set -eu
 
@@ -167,7 +171,7 @@ jobs:
           # Only post the summary to Slack when triggered manually (button
           # / workflow_dispatch). The daily cron stays silent — meetings
           # themselves arrive via the normal pipeline ~15 min later.
-          if [ "$TRIGGER_EVENT" = "schedule" ]; then
+          if [ "$TRIGGER_EVENT" = "schedule" ] || [ "${TRIGGER_ACTION:-}" = "fathom_scheduled_backfill" ]; then
             echo "Triggered by cron — skipping Slack summary post."
             exit 0
           fi
