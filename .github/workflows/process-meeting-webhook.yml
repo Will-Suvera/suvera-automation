@@ -668,6 +668,44 @@ jobs:
             Do NOT call Slack files.* APIs. Do NOT probe video.m3u8.
             The next workflow step handles all of that.
 
+            ## Step 7: Proposal spec (Prospect sales calls only)
+            If this was a sales conversation with a prospective practice or
+            PCN (you set Stage "Prospect" and Suvera presented Recall or
+            discussed pricing), write /tmp/proposal.json. A deterministic
+            step after you builds the proposal Google Doc + PDF from it and
+            the Dock builder puts the PDF in the client workspace.
+            Otherwise write {"skip": true, "reason": "<why>"} to that file.
+            Fields (all optional except notion_page_id):
+              "notion_page_id": "$NOTION_PAGE_ID"
+              "written_for": [{"name": "First Last", "role": "<Role>: <Practice>", "email": "..."}]
+                 one row per EXTERNAL attendee. Emails come from the Fathom
+                 meeting's calendar_invitees: GET
+                 https://api.fathom.ai/external/v1/meetings?created_after=<meeting date minus 1 day>
+                 with the same X-Api-Key, match recording_id == $RID, keep
+                 is_external == true. Fathom names look like "SURNAME, First
+                 (ORG)" - write "First Surname". Role as said on the call (GP
+                 Partner, Practice Manager, Clinical Director...), else
+                 "Practice team: <Practice>". Never invent an email.
+              "system": "EMIS" | "SystmOne" | "EMIS and SystmOne" (only if stated)
+              "local_scheme": local incentive scheme named on the call (e.g. "Enhanced Care Framework")
+              "extra_bullets": up to 3 short "What's included" lines specific
+                 to this call - ONLY things Recall does today or that the
+                 Suvera speaker explicitly committed to (phrase roadmap items
+                 "as they are released"). No pricing.
+              "short_name": how the practice is named in prose (e.g. "Hall Grove")
+              "email_body": ONLY when $ACCOUNT is "will". The follow-up email
+                 Will sends with the Dock link. Plain text, one sentence per
+                 paragraph, blank line between: "Hi <first names>," / a
+                 one-line thank-you tied to the call / "I've put everything we
+                 covered in one place for you here - including the proposal,
+                 pricing and a quick demo video: {DOCK_LINK}" / at most one
+                 line on something he promised to come back on / one soft ask
+                 ending in "?" and a permission to say no ("No troubles if
+                 not - let me know either way.") / "Very best," then "Will".
+                 British English, spaced hyphens, never an em dash, never
+                 "Kind regards". Keep {DOCK_LINK} exactly as written.
+            Print PROPOSAL_SPEC_WRITTEN when done.
+
             ## Context
             Suvera builds Planner, a QOF recall tool for NHS GP practices and
             PCNs. Partners are GP Practices and PCNs. Internal meetings and
@@ -683,6 +721,27 @@ jobs:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: python3 .github/scripts/hubspot_move_deal.py --rid "$RID"
+
+      - name: Build proposal (Google Doc + PDF for Dock)
+        # Deterministic, no Claude. Prospect calls only; never fails the job.
+        if: success()
+        continue-on-error: true
+        env:
+          RID: ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
+        run: |
+          pip install --quiet python-docx
+          command -v rclone >/dev/null || curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          python3 .github/scripts/build_proposal.py --rid "$RID" --spec /tmp/proposal.json
 
       - name: Upload video clips from manifest
         if: success()

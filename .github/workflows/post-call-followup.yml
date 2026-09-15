@@ -1,0 +1,48 @@
+name: Post-call follow-up
+# After a prospect call: once the Dock builder has published the workspace
+# (Notion "Dock Public URL"), make Will's Gmail draft and post the Share-panel
+# checklist in the meeting's Slack thread. Started by the meeting pipeline
+# finishing (then polls up to 2h for Dock), by the Cloudflare 30-min signal,
+# or by hand.
+on:
+  workflow_run:
+    workflows: ["Process meeting (webhook)"]
+    types: [completed]
+  repository_dispatch:
+    types: [dock_watchdog]
+  workflow_dispatch:
+    inputs:
+      test_to:
+        description: "Test: make the draft to this address only (no Slack, no stamp)"
+        required: false
+      dry_run:
+        description: "true = print only"
+        required: false
+        default: "false"
+
+concurrency:
+  group: post-call-followup
+  cancel-in-progress: false
+
+jobs:
+  followup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 135
+    steps:
+      - uses: actions/checkout@v4
+      - name: Finish follow-ups
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DRIVE_WEBAPP_URL: ${{ secrets.DRIVE_WEBAPP_URL }}
+          DRIVE_WEBAPP_SECRET: ${{ secrets.DRIVE_WEBAPP_SECRET }}
+          EVENT: ${{ github.event_name }}
+          TEST_TO: ${{ github.event.inputs.test_to }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          WAIT=0
+          [ "$EVENT" = "workflow_run" ] && WAIT=120
+          set -- --hours 72 --wait-minutes "$WAIT"
+          [ -n "$TEST_TO" ] && set -- "$@" --test-to "$TEST_TO"
+          [ "$DRY_RUN" = "true" ] && set -- "$@" --dry-run
+          python3 .github/scripts/post_call_followup.py "$@"
