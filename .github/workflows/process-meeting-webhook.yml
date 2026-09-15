@@ -72,6 +72,9 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Catch-up runs (fire-unprocessed.yml) are dispatched by the github-actions
+          # bot; without this the action refuses them ("non-human actor").
+          allowed_bots: "github-actions[bot],github-actions"
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Grep,Glob
             --max-turns 140
