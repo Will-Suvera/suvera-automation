@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finish a prospect call's follow-up once its Dock workspace is published.
+"""Finish a prospect call's follow-up once its Dock workspace exists.
 
 Picks Partner Meeting Library pages (created in the last --hours) that have a
 Proposal Doc (made by build_proposal.py) and an empty "Follow-up". When the
@@ -129,11 +129,17 @@ def handle(page, version, dry, test_to):
     if test_to or dry:
         return
     who = ", ".join(emails) or "the attendees"
-    msg = (f":white_check_mark: *Dock published* for {practice}: <{link}|open the workspace>\n"
-           + (":envelope: Follow-up email is in Will's Gmail drafts (not sent) - check it, then send.\n"
+    pdf, doc = text(pr.get("Proposal PDF")), text(pr.get("Proposal Doc"))
+    # Automatic PDF placement is paused (15 Sep 2026: an automated replace removed
+    # the client-visible file from a live workspace), so a person places it.
+    msg = (f":white_check_mark: *Dock workspace ready* for {practice}: <{link}|open the workspace>\n"
+           + (":envelope: Follow-up email is in Will's Gmail drafts (not sent).\n"
               if note.startswith("draft ") else f":envelope: Follow-up email: {note}.\n")
-           + f"*Two clicks left in Dock (Share):* add {who} as *Collaborators* (untick the invite message), "
-             "then set General access to *Restricted Email*.")
+           + "*Before sending, in Dock:*\n"
+           + f"1. Investment Proposal page: swap the placeholder PDF for this practice's proposal"
+           + (f" (<{pdf}|PDF>" if pdf else "") + (f", <{doc}|Google Doc>)" if doc else (")" if pdf else "")) + "\n"
+           + "2. Publish\n"
+           + f"3. Share: add {who} as *Collaborators* (untick the invite message), General access *Restricted Email*")
     slack(ts, msg)
     stamp = f"done {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}: {note}"
     notion(f"/pages/{page['id']}", {"properties": {"Follow-up": {"rich_text": [{"type": "text", "text": {"content": stamp}}]}}}, "PATCH")

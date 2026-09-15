@@ -440,7 +440,7 @@ def main(argv):
     if ts and os.environ.get("SLACK_BOT_TOKEN") and "--no-slack" not in argv:
         msg = (f":page_facing_up: *Proposal - {P}* (Google Doc, anyone at Suvera can edit)\n<{doc['webViewLink']}|{name}>\n"
                f"Standard terms: £0.75 per patient (2-year) or £0.675 (3-year), {int(N):,} patients. Edit the Doc before the "
-               "client sees it if the call agreed anything different; the Dock builder uploads the PDF within the hour.")
+               "client sees it if the call agreed anything different. The Dock checklist follows in this thread once the workspace is built.")
         r = http("POST", "https://slack.com/api/chat.postMessage",
                  json.dumps({"channel": CHANNEL, "thread_ts": ts, "text": msg, "unfurl_links": False}).encode(),
                  {"Authorization": "Bearer " + os.environ["SLACK_BOT_TOKEN"], "Content-Type": "application/json; charset=utf-8"})
