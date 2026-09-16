@@ -36,6 +36,10 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           DRIVE_WEBAPP_URL: ${{ secrets.DRIVE_WEBAPP_URL }}
           DRIVE_WEBAPP_SECRET: ${{ secrets.DRIVE_WEBAPP_SECRET }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_WILL: ${{ secrets.GMAIL_REFRESH_TOKEN_WILL }}
+          GMAIL_REFRESH_TOKEN_ELLENA: ${{ secrets.GMAIL_REFRESH_TOKEN_ELLENA }}
           EVENT: ${{ github.event_name }}
           TEST_TO: ${{ github.event.inputs.test_to }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}

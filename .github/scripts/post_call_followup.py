@@ -16,17 +16,25 @@ Dock builder has uploaded the proposal PDF and published (it writes
 Usage: post_call_followup.py [--hours 72] [--wait-minutes 0] [--dry-run] [--test-to addr]
   --wait-minutes N  keep polling every 3 min for pages still waiting on Dock
   --test-to addr    make the draft to this address only; no Slack, no stamp
+Drafts go to the mailbox of the Fathom account that recorded the meeting
+(gmail_draft.py + GMAIL_REFRESH_TOKEN_<ACCOUNT>); Will also has an Apps Script fallback.
 Env: NOTION_TOKEN, SLACK_BOT_TOKEN, DRIVE_WEBAPP_URL, DRIVE_WEBAPP_SECRET
 """
 import html
 import json
+import os.path
+import sys
 import os
 import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gmail_draft  # noqa: E402
+
 DS = "8115f0ee-00c8-488a-a05b-57726af0acf4"
+OWNER = {"will": "Will", "ellena": "Ellena", "ivan": "Ivan", "caitlin": "Caitlin", "camilla": "Camilla"}
 CHANNEL = "C0APW8DSA4R"
 UA = {"User-Agent": "Mozilla/5.0 (suvera-automation)"}
 
@@ -110,21 +118,29 @@ def handle(page, version, dry, test_to):
     body = text(pr.get("Follow-up Email")) or "Hi all,\n\nI've put everything we covered in one place for you here: {DOCK_LINK}\n\nVery best,\nWill"
     subject = f"Suvera <> {practice}"
     plain = body.replace("{DOCK_LINK}", link)
-    note = ""
-    if account != "will":
-        note = f"no draft ({account}'s call - drafts only go to Will's Gmail)"
-    elif not emails and not test_to:
+    note, who_owns = "", OWNER.get(account, account.title())
+    if not emails and not test_to:
         note = "no draft (no attendee emails)"
-    elif version < 2:
-        note = "no draft (Apps Script web app not yet redeployed with the draft action)"
     elif dry:
         note = "dry run"
         print(subject, "->", test_to or emails, "\n" + plain, "\n" + to_html(body, link))
     else:
-        r = call(os.environ["DRIVE_WEBAPP_URL"], {"secret": os.environ["DRIVE_WEBAPP_SECRET"], "action": "draft",
-                                                  "to": test_to or ", ".join(emails), "subject": subject,
-                                                  "text": plain, "html": to_html(body, link)})
-        note = f"draft {r.get('draft_id')}" if r.get("ok") else f"draft failed: {r}"
+        to = test_to or ", ".join(emails)
+        try:
+            # First choice: a draft in that person's own mailbox (Gmail API).
+            did = gmail_draft.create_draft(account, to, subject, plain, to_html(body, link))
+        except Exception as e:
+            did, note = None, f"draft failed: {e}"
+        if did:
+            note = f"draft {did} in {who_owns}'s Gmail"
+        elif not note and account == "will" and version >= 2:
+            # Fallback for Will: the Apps Script web app, which runs as him.
+            r = call(os.environ["DRIVE_WEBAPP_URL"], {"secret": os.environ["DRIVE_WEBAPP_SECRET"], "action": "draft",
+                                                      "to": to, "subject": subject,
+                                                      "text": plain, "html": to_html(body, link)})
+            note = f"draft {r.get('draft_id')} in Will's Gmail" if r.get("ok") else f"draft failed: {r}"
+        elif not note:
+            note = f"no draft ({who_owns}'s Gmail not connected yet - run gmail_oauth_setup.py --account {account})"
     log(practice, "|", note)
     if test_to or dry:
         return
@@ -133,7 +149,7 @@ def handle(page, version, dry, test_to):
     # Automatic PDF placement is paused (15 Sep 2026: an automated replace removed
     # the client-visible file from a live workspace), so a person places it.
     msg = (f":white_check_mark: *Dock workspace ready* for {practice}: <{link}|open the workspace>\n"
-           + (":envelope: Follow-up email is in Will's Gmail drafts (not sent).\n"
+           + (f":envelope: Follow-up email is in {who_owns}'s Gmail drafts (not sent).\n"
               if note.startswith("draft ") else f":envelope: Follow-up email: {note}.\n")
            + "*Before sending, in Dock:*\n"
            + f"1. Investment Proposal page: swap the placeholder PDF for this practice's proposal"

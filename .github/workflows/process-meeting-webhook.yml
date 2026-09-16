@@ -693,8 +693,10 @@ jobs:
                  Suvera speaker explicitly committed to (phrase roadmap items
                  "as they are released"). No pricing.
               "short_name": how the practice is named in prose (e.g. "Hall Grove")
-              "email_body": ONLY when $ACCOUNT is "will". The follow-up email
-                 Will sends with the Dock link. Plain text, one sentence per
+              "email_body": the follow-up email the person whose Fathom
+                 account recorded this call ($ACCOUNT: will -> Will Gao,
+                 ellena -> Ellena Rollason, anyone else -> Will) sends with
+                 the Dock link. Sign off with that first name. Plain text, one sentence per
                  paragraph, blank line between: "Hi <first names>," / a
                  one-line thank-you tied to the call / "I've put everything we
                  covered in one place for you here - including the proposal,
