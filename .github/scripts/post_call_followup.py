@@ -2,7 +2,7 @@
 """Finish a prospect call's follow-up once its Dock workspace exists.
 
 Picks Partner Meeting Library pages (created in the last --hours) that have a
-Proposal Doc (made by build_proposal.py) and an empty "Follow-up". When the
+Slack card and an empty "Follow-up" (a proposal is not required). When the
 Dock builder has uploaded the proposal PDF and published (it writes
 "Dock Public URL"), this:
   1. creates a Gmail DRAFT in Will's mailbox (never sent) to Attendee Emails,
@@ -72,7 +72,7 @@ def pending(hours):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = {"filter": {"and": [
         {"timestamp": "created_time", "created_time": {"on_or_after": since}},
-        {"property": "Proposal Doc", "url": {"is_not_empty": True}},
+        {"property": "Slack TS", "rich_text": {"is_not_empty": True}},
         {"property": "Follow-up", "rich_text": {"is_empty": True}}]}, "page_size": 50}
     return notion(f"/data_sources/{DS}/query", body).get("results", [])
 
@@ -153,7 +153,8 @@ def handle(page, version, dry, test_to):
               if note.startswith("draft ") else f":envelope: Follow-up email: {note}.\n")
            + "*Before sending, in Dock:*\n"
            + f"1. Investment Proposal page: swap the placeholder PDF for this practice's proposal"
-           + (f" (<{pdf}|PDF>" if pdf else "") + (f", <{doc}|Google Doc>)" if doc else (")" if pdf else "")) + "\n"
+           + ((f" (<{pdf}|PDF>" if pdf else "") + (f", <{doc}|Google Doc>)" if doc else (")" if pdf else ""))
+              if (pdf or doc) else " (none was built automatically - run the 'Build proposal (manual)' workflow with this meeting's id)") + "\n"
            + "2. Publish\n"
            + f"3. Share: add {who} as *Collaborators* (untick the invite message), General access *Restricted Email*")
     slack(ts, msg)

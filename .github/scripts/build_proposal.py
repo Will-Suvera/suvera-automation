@@ -367,6 +367,12 @@ def main(argv):
     page = notion("GET", f"/pages/{page_id}")
     pr = page["properties"]
     P = ptext(pr.get("Practice")) or spec.get("practice", "")
+    if not P:
+        # Titles look like "The Albion Surgery — Emily Randall (16 September 2026)"
+        title = ptext(pr.get("Meeting"))
+        P = re.split(r"\s+[\u2014\u2013-]\s+", title, maxsplit=1)[0].strip() if title else ""
+        if P:
+            log("Practice empty on the page; using the meeting title:", P)
     stage, account = ptext(pr.get("Stage")), (ptext(pr.get("Fathom Account")) or "will").lower()
     if not P:
         log("no Practice on the page - skipping")

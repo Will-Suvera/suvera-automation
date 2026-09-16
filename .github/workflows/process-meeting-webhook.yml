@@ -275,6 +275,9 @@ jobs:
             Properties:
               Meeting (title) — "Practice — Lead Person (date)"
               Meeting ID (rich_text) — "$RID"
+              Practice (rich_text) — the practice or PCN name exactly as it
+                should appear on a proposal, e.g. "The Albion Surgery".
+                REQUIRED: the proposal builder reads this field.
               Fathom Recording (url) — "$SHARE_URL"
               Opportunity Signal (select) — High/Medium/Low
               Main Theme (multi_select) — ONE of: Data Accuracy, Automation,
