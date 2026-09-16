@@ -1,0 +1,53 @@
+name: Build proposal (manual)
+# Runs just the proposal step for one meeting, by Fathom recording id or Notion
+# page id. Used to backfill a proposal, or to re-make one after editing the
+# template. The meeting pipeline runs the same script automatically.
+on:
+  workflow_dispatch:
+    inputs:
+      rid:
+        description: "Fathom recording id (Meeting ID in Notion)"
+        required: false
+      page:
+        description: "Notion page id (instead of rid)"
+        required: false
+      force:
+        description: "true = rebuild even if a proposal already exists"
+        required: false
+        default: "false"
+      no_slack:
+        description: "true = do not post the Doc link in the Slack thread"
+        required: false
+        default: "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build proposal
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
+          RID: ${{ github.event.inputs.rid }}
+          PAGE: ${{ github.event.inputs.page }}
+          FORCE: ${{ github.event.inputs.force }}
+          NO_SLACK: ${{ github.event.inputs.no_slack }}
+        run: |
+          pip install --quiet python-docx
+          command -v rclone >/dev/null || curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          set -- --strict
+          [ -n "$RID" ] && set -- "$@" --rid "$RID"
+          [ -n "$PAGE" ] && set -- "$@" --page "$PAGE"
+          [ "$FORCE" = "true" ] && set -- "$@" --force
+          [ "$NO_SLACK" = "true" ] && set -- "$@" --no-slack
+          python3 .github/scripts/build_proposal.py "$@"
