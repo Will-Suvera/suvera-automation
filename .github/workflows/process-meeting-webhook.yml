@@ -745,6 +745,27 @@ jobs:
           printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
           python3 .github/scripts/build_proposal.py --rid "$RID" --spec /tmp/proposal.json
 
+      - name: Fire the Dock builder now (instant workspace)
+        # Optional: if ROUTINE_WEBHOOK_URL is set (a claude.ai routine webhook
+        # trigger for "Dock workspace for new partner meetings"), the workspace
+        # is built within a minute instead of waiting for the hourly run.
+        if: success()
+        continue-on-error: true
+        env:
+          ROUTINE_WEBHOOK_URL: ${{ secrets.ROUTINE_WEBHOOK_URL }}
+          RID: ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
+          TITLE: ${{ github.event.client_payload.title || github.event.inputs.title }}
+        run: |
+          if [ -z "${ROUTINE_WEBHOOK_URL:-}" ]; then
+            echo "ROUTINE_WEBHOOK_URL not set - the Dock builder picks this up on its hourly run"
+            exit 0
+          fi
+          BODY=$(printf '{"source":"suvera-automation","recording_id":"%s","title":"%s"}' "$RID" "$TITLE")
+          CODE=$(curl -sS -o /tmp/routine.out -w '%{http_code}' -X POST "$ROUTINE_WEBHOOK_URL" \
+                   -H "Content-Type: application/json" -d "$BODY" || echo 000)
+          echo "routine webhook -> HTTP $CODE"
+          head -c 300 /tmp/routine.out || true
+
       - name: Upload video clips from manifest
         if: success()
         env:
