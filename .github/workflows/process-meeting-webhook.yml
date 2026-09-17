@@ -749,25 +749,41 @@ jobs:
           python3 .github/scripts/build_proposal.py --rid "$RID" --spec /tmp/proposal.json
 
       - name: Fire the Dock builder now (instant workspace)
-        # Optional: if ROUTINE_WEBHOOK_URL is set (a claude.ai routine webhook
-        # trigger for "Dock workspace for new partner meetings"), the workspace
-        # is built within a minute instead of waiting for the hourly run.
+        # Wakes the claude.ai routine "Dock workspace for new partner meetings"
+        # through its API trigger, so the workspace build starts within a minute
+        # instead of waiting for the routine's hourly run. Needs the secret
+        # ROUTINE_FIRE_TOKEN (claude.ai/code/routines > the routine > Edit >
+        # Add another trigger > API > Generate token; shown once). Routine
+        # GitHub-event triggers only support pull_request and release, so a
+        # workflow_run hook can never deliver. Unset = hourly run, as before.
         if: success()
         continue-on-error: true
         env:
-          ROUTINE_WEBHOOK_URL: ${{ secrets.ROUTINE_WEBHOOK_URL }}
+          ROUTINE_FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          ROUTINE_ID: trig_0137ppDXLSiakw1uf4y2bWm5
           RID: ${{ github.event.client_payload.recording_id || github.event.inputs.recording_id }}
-          TITLE: ${{ github.event.client_payload.title || github.event.inputs.title }}
         run: |
-          if [ -z "${ROUTINE_WEBHOOK_URL:-}" ]; then
-            echo "ROUTINE_WEBHOOK_URL not set - the Dock builder picks this up on its hourly run"
+          if [ -z "${ROUTINE_FIRE_TOKEN:-}" ]; then
+            echo "ROUTINE_FIRE_TOKEN not set - the Dock builder picks this up on its hourly run"
             exit 0
           fi
-          BODY=$(printf '{"source":"suvera-automation","recording_id":"%s","title":"%s"}' "$RID" "$TITLE")
-          CODE=$(curl -sS -o /tmp/routine.out -w '%{http_code}' -X POST "$ROUTINE_WEBHOOK_URL" \
-                   -H "Content-Type: application/json" -d "$BODY" || echo 000)
-          echo "routine webhook -> HTTP $CODE"
-          head -c 300 /tmp/routine.out || true
+          if [ ! -s /tmp/clips.json ]; then
+            echo "no Slack card was posted for this run (filtered out or duplicate) - not waking the builder"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            CODE=$(curl -sS -o /tmp/routine.out -w '%{http_code}' -X POST \
+                     "https://api.anthropic.com/v1/claude_code/routines/${ROUTINE_ID}/fire" \
+                     -H "Authorization: Bearer ${ROUTINE_FIRE_TOKEN}" \
+                     -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+                     -H "anthropic-version: 2023-06-01" \
+                     -H "Content-Type: application/json" \
+                     -d "{\"text\":\"New partner meeting processed (recording ${RID}). Run the sweep now.\"}" || echo 000)
+            echo "routine fire -> HTTP $CODE (attempt $attempt)"
+            case "$CODE" in 2*) break ;; esac
+            sleep 20
+          done
+          case "$CODE" in 2*) ;; *) echo "::warning::Dock builder not woken (HTTP $CODE) - the hourly run will pick it up"; head -c 300 /tmp/routine.out || true ;; esac
 
       - name: Upload video clips from manifest
         if: success()
