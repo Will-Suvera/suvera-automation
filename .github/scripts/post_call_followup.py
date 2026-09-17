@@ -146,15 +146,22 @@ def handle(page, version, dry, test_to):
         return
     who = ", ".join(emails) or "the attendees"
     pdf, doc = text(pr.get("Proposal PDF")), text(pr.get("Proposal Doc"))
-    # Automatic PDF placement is paused (15 Sep 2026: an automated replace removed
-    # the client-visible file from a live workspace), so a person places it.
+    # The Dock builder routine reports in "Dock Status" whether it put this
+    # practice's own proposal on the Investment Proposal page (17 Sep 2026).
+    dock_status = text(pr.get("Dock Status")).lower()
+    links = ((f" (<{pdf}|PDF>" if pdf else "") + (f", <{doc}|Google Doc>)" if doc else (")" if pdf else ""))
+             if (pdf or doc) else " (none was built automatically - run the 'Build proposal (manual)' workflow with this meeting's id)")
+    if "proposal placed" in dock_status:
+        step1 = f"1. Investment Proposal page: this practice's proposal is already on it - check the figures against the call{links}\n"
+    elif "not placed" in dock_status:
+        step1 = f"1. Investment Proposal page: the proposal could NOT be placed automatically, so the placeholder is hidden - add this practice's proposal and unhide the section{links}\n"
+    else:
+        step1 = f"1. Investment Proposal page: swap the placeholder PDF for this practice's proposal{links}\n"
     msg = (f":white_check_mark: *Dock workspace ready* for {practice}: <{link}|open the workspace>\n"
            + (f":envelope: Follow-up email is in {who_owns}'s Gmail drafts (not sent).\n"
               if note.startswith("draft ") else f":envelope: Follow-up email: {note}.\n")
            + "*Before sending, in Dock:*\n"
-           + f"1. Investment Proposal page: swap the placeholder PDF for this practice's proposal"
-           + ((f" (<{pdf}|PDF>" if pdf else "") + (f", <{doc}|Google Doc>)" if doc else (")" if pdf else ""))
-              if (pdf or doc) else " (none was built automatically - run the 'Build proposal (manual)' workflow with this meeting's id)") + "\n"
+           + step1
            + "2. Publish\n"
            + f"3. Share: add {who} as *Collaborators* (untick the invite message), General access *Restricted Email*")
     slack(ts, msg)
