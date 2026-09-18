@@ -690,6 +690,24 @@ jobs:
                  Partner, Practice Manager, Clinical Director...), else
                  "Practice team: <Practice>". Never invent an email.
               "system": "EMIS" | "SystmOne" | "EMIS and SystmOne" (only if stated)
+              "list_size": the registered list size as a number ONLY if someone
+                 stated it on the call (e.g. "we're 9,300") - it beats the
+                 public registry, which is often a year old. Omit otherwise.
+              "practices": ONLY when the deal covers more than one practice -
+                 a PCN, a group or a multi-site partnership - one entry per
+                 practice: [{"name": "...", "ods": "...", "list_size": n}].
+                 Name every member practice (use the NHS ODS API
+                 https://directory.spineservices.nhs.uk/ORD/2-0-0/organisations?RelTypeId=RE8&TargetOrgId=<PCN ODS code>
+                 for a PCN's members); list_size only if stated, else omit
+                 it and the builder looks it up. Leave out for a single practice.
+              "pcn_discount_agreed": true only if the Suvera speaker agreed to
+                 honour the PCN rate for this network (e.g. a PCN under 40,000
+                 patients joining as a whole).
+              "agreed_terms": up to 4 short full sentences for anything
+                 commercial the Suvera speaker agreed or offered on the call
+                 beyond the list price - e.g. work included free, a dated
+                 promotion, a discount, a clawback if they leave early. Quote
+                 amounts and dates exactly as said. Omit if nothing was agreed.
               "local_scheme": local incentive scheme named on the call (e.g. "Enhanced Care Framework")
               "extra_bullets": up to 3 short "What's included" lines specific
                  to this call - ONLY things Recall does today or that the
@@ -741,6 +759,7 @@ jobs:
           FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
           FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
           FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
         run: |
           pip install --quiet python-docx
           command -v rclone >/dev/null || curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null

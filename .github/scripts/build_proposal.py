@@ -16,7 +16,16 @@ Runs after the meeting pipeline. For a Prospect meeting it:
 Optional spec (--spec, written by the pipeline's Claude step) adds call detail:
   {"written_for": [{"name","role","email"}], "system": "EMIS", "local_scheme":
    "Enhanced Care Framework", "extra_bullets": [...], "short_name": "...",
-   "email_body": "... {DOCK_LINK} ...", "skip": false}
+   "list_size": 9300 (as stated on the call - beats the public registry),
+   "practices": [{"name","ods","list_size"}] (several sites or a PCN: one
+   pricing row per practice), "pcn_discount_agreed": true (the Suvera speaker
+   agreed to honour the PCN rate), "agreed_terms": ["..."] (anything
+   commercial agreed on the call beyond list price), "email_body": "...
+   {DOCK_LINK} ...", "skip": false}
+
+Pricing rules (Will, 17-18 Sep 2026): monthly fees, PCN discount rows in the
+table, every figure to 2 decimal places (the rate shows as £0.68, not £0.675).
+A Prospect call that cannot get a proposal is reported in the Slack thread.
 
 Usage: build_proposal.py (--page <notion page id> | --rid <Meeting ID>) [--spec f.json] [--dry-run]
                          [--force] [--template local.docx] [--strict]
@@ -181,6 +190,33 @@ def fathom_invitees(account, rid, date_iso):
     return []
 
 
+def hubspot_title(email):
+    """Job title from HubSpot for an attendee email, or ''."""
+    tok = os.environ.get("HUBSPOT_TOKEN", "")
+    if not (tok and email):
+        return ""
+    try:
+        r = http("POST", "https://api-eu1.hubapi.com/crm/v3/objects/contacts/search",
+                 json.dumps({"filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
+                             "properties": ["jobtitle"], "limit": 1}).encode(),
+                 {"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+        return ((r.get("results") or [{}])[0].get("properties") or {}).get("jobtitle") or ""
+    except Exception as e:
+        log("hubspot title lookup failed:", e)
+        return ""
+
+
+def slack_note(ts, msg):
+    if not (ts and os.environ.get("SLACK_BOT_TOKEN")):
+        return
+    try:
+        http("POST", "https://slack.com/api/chat.postMessage",
+             json.dumps({"channel": CHANNEL, "thread_ts": ts, "text": msg, "unfurl_links": False}).encode(),
+             {"Authorization": "Bearer " + os.environ["SLACK_BOT_TOKEN"], "Content-Type": "application/json; charset=utf-8"})
+    except Exception as e:
+        log("slack warning:", e)
+
+
 def person_name(inv):
     n, email = (inv.get("name") or "").strip(), inv.get("email") or ""
     if not n or "@" in n:
@@ -214,12 +250,25 @@ def whole(x):
     return int(Decimal(x).quantize(Decimal("1"), ROUND_HALF_UP))
 
 
-def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, people, writer, setup_extra):
+RATES = [("2-year term (standard)", "£0.75", Decimal("0.75")),
+         ("3-year term", "£0.68 (-10%)", Decimal("0.675")),
+         ("With PCN discount - 2-year term", "£0.68 (-10%)", Decimal("0.675")),
+         ("With PCN discount - 3-year term", "£0.60 (-20%)", Decimal("0.60"))]
+
+
+def monthly(n, rate):
+    return r2(Decimal(n) * rate / 12)
+
+
+def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, people, writer, setup_extra,
+               practices=None, pcn_agreed=False, agreed_terms=()):
+    """practices: [(name, list_size)] when the deal covers several sites; N is then their sum."""
     import docx
     from docx.text.paragraph import Paragraph
     d = docx.Document(template)
     k = Decimal(N) / 1000
-    m2, m3 = Decimal(N) * Decimal("0.75") / 12, Decimal(N) * Decimal("0.675") / 12
+    m2 = monthly(N, Decimal("0.675"))
+    multi = practices and len(practices) > 1
 
     def set_par(p, text):
         runs = p.runs
@@ -257,16 +306,24 @@ def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, pe
     def find(start):
         return next(p for p in d.paragraphs if p.text.lstrip("• ").startswith(start))
 
-    set_par(find("Suvera is delighted"),
-            f"Suvera is delighted to share a proposal for {P} to use Recall to automate and streamline recalls across the practice"
-            + (f" - with the option to bring in the wider {pcn}." if pcn else "."))
+    if multi:
+        names = ", ".join(n for n, _ in practices[:-1]) + f" and {practices[-1][0]}"
+        set_par(find("Suvera is delighted"),
+                f"Suvera is delighted to share a proposal for {P} to use Recall to automate and streamline recalls across "
+                f"{names}" + (" - with our PCN rate honoured for the network, as discussed." if pcn_agreed else
+                              (f", with the PCN rate shown alongside for when {pcn} comes aboard." if pcn else ".")))
+    else:
+        set_par(find("Suvera is delighted"),
+                f"Suvera is delighted to share a proposal for {P} to use Recall to automate and streamline recalls across the practice"
+                + (f" - with the option to bring in the wider {pcn}." if pcn else "."))
     set_par(find("As a partner"), f"As a partner, {P} receives:")
     bullets, p = [], find("Full Recall platform access")
     while p is not None and p.text.strip().startswith("•"):
         bullets.append(p)
         nxt = p._p.getnext()
         p = Paragraph(nxt, p._parent) if nxt is not None and nxt.tag.endswith("}p") else None
-    new = [f"Full Recall platform access for all registered patients - {N:,}",
+    sized = (", ".join(f"{n} ({s:,})" for n, s in practices) if multi else f"{N:,}")
+    new = [f"Full Recall platform access for all registered patients - {sized}",
            f"Daily clinical data extracts and refresh, fully {system} integrated",
            f"QOF, {local_scheme or 'LES'} and CQC performance tracking and recall list generation",
            "High-risk drug and DMARD monitoring built in (MHRA / BNF frequencies)",
@@ -283,18 +340,33 @@ def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, pe
         set_par(b, t)
     for b in bullets[len(new):]:
         b._p.getparent().remove(b._p)
+    set_par(find("Platform fee is billed"),
+            "Platform fee is billed per registered patient per year, unlimited SMS and email included, invoiced monthly. "
+            "There are no set-up or onboarding fees. Monthly fees" + (" per practice" if multi else "") + ", ex-VAT:")
     set_par(find("*Patient count"),
-            f"*Patient count: indicative fees are based on an approximate registered list size of {N:,}. Actual fees are "
-            "calculated against the registered patient count loaded into Recall at go-live, charged at the rate above.")
+            "*Patient count: indicative fees are based on "
+            + (f"approximate registered list sizes of " + ", ".join(f"{s:,} ({n})" for n, s in practices) + f" - {N:,} in total."
+               if multi else f"an approximate registered list size of {N:,}.")
+            + " Actual fees are calculated against the registered patient count loaded into Recall at go-live, charged at the rate above.")
+    who = pcn or "your PCN"
     set_par(find("PCN discount:"),
-            "PCN discount: Our 10% PCN discount applies when a network of 40,000+ patients comes aboard together"
-            + (f" - if {pcn} joins as a network, every practice moves to the PCN rate." if pcn else ".")
-            + " The two-year term is standard; a three-year commitment earns 10% off the base rate.")
+            ("PCN discount: as discussed, we are happy to honour our 10% PCN discount for " + who + " when the whole network comes aboard together"
+             if pcn_agreed else
+             "PCN discount: our 10% PCN discount applies when " + who + " comes aboard as a whole network")
+            + (" - every practice, including " + SHORT + ", moves to the PCN rate." if not multi else ".")
+            + " The two-year term is standard; a three-year commitment earns a further 10%, taking the rate to £0.60 per patient (20% off). "
+            "Rates are shown to the nearest penny; discounts are applied to the £0.75 base rate before rounding.")
+    if agreed_terms:
+        anchor = find("PCN discount:")
+        c = copy.deepcopy(anchor._p)
+        anchor._p.addnext(c)
+        agreed = Paragraph(c, anchor._parent)
+        set_par(agreed, "Agreed on the call: " + " ".join(t.strip().rstrip(".") + "." for t in agreed_terms if t.strip()))
     set_labelled(find("Introduce a practice"), "Introduce a practice.",
                  f"For each practice you introduce that signs up, both {SHORT} and that practice receive one month off their invoice.")
     set_labelled(find("Bring in the PCN"), "Bring in the PCN.",
                  f"If {SHORT} brings in a PCN-wide contract for {pcn or 'your PCN'}, {SHORT} also receives a further one month "
-                 f"off its invoice - worth {gbp(m2)} + VAT at the 2-year rate.")
+                 f"off its invoice - worth {gbp(m2)} + VAT at the 2-year PCN rate.")
     set_par(find("Setup takes around"),
             "Setup takes around three weeks: clinical system and ICE access and integration, "
             + (setup_extra.rstrip(", ") + ", " if setup_extra else "")
@@ -312,12 +384,34 @@ def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, pe
             cell(c, v)
     for c, v in zip(t_by.rows[1].cells, writer):
         cell(c, v)
-    for r in t_price.rows[3:]:
+    if multi:
+        # one row per practice + total; the four columns become the four rates
+        price_rows = [(f"{n} ({s:,})", *[gbp(monthly(s, r)) for _, _, r in RATES]) for n, s in practices]
+        price_rows.append((f"{P} total ({N:,})", *[gbp(sum(monthly(s, r) for _, s in practices)) for _, _, r in RATES]))
+        # the template table has 4 columns: Practice | 2-year | 3-year | PCN 3-year
+        # (the PCN 2-year rate equals the 3-year rate, so it needs no column of its own)
+        cols = [0, 1, 2, 4]
+        header = ("Practice (registered patients*)", "List price £0.75 (2-year term)",
+                  "£0.68, -10% (3-year term)", "PCN rate £0.68, -10% (2-year term)", "PCN rate £0.60, -20% (3-year term)")
+        price_rows = [tuple(row[i] for i in cols) for row in price_rows]
+        header = tuple(header[i] for i in cols)
+        for c, x in zip(t_price.rows[0].cells, header):
+            cell(c, x)
+    else:
+        price_rows = [(f"{P} - {lab}" if not lab.startswith("With PCN") else lab.replace("With PCN discount", f"With PCN discount (if {who} joins)" if i == 2 else "With PCN discount"),
+                       rate, gbp(monthly(N, r)), gbp(monthly(N, r) * Decimal("1.2")))
+                      for i, (lab, rate, r) in enumerate(RATES)]
+    while len(t_price.rows) - 1 < len(price_rows):
+        t_price._tbl.append(copy.deepcopy(t_price.rows[1]._tr))
+    for r in t_price.rows[1 + len(price_rows):]:
         t_price._tbl.remove(r._tr)
-    for r, v in zip(t_price.rows[1:], [(f"{P} - 2-year term (standard)", "£0.75", gbp(m2), gbp(m2 * Decimal("1.2"))),
-                                      (f"{P} - 3-year term", "£0.675 (-10%)", gbp(m3), gbp(m3 * Decimal("1.2")))]):
+    for r, v in zip(t_price.rows[1:], price_rows):
         for c, x in zip(r.cells, v):
             cell(c, x)
+    if multi:
+        for c in t_price.rows[-1].cells:
+            for run in c.paragraphs[0].runs:
+                run.bold = True
     n = lambda v: f"{whole(Decimal(v) * k):,}"
     total = 0
     for i, (val, cap, fmt) in enumerate(ROI, start=1):
@@ -334,6 +428,8 @@ def build_docx(template, out, P, SHORT, N, pcn, system, local_scheme, extras, pe
     cell(t_roi.rows[9].cells[2], f"(£{fee:,})")
     cell(t_roi.rows[10].cells[0], f"Indicative net value to {P} (Year 1)")
     cell(t_roi.rows[10].cells[2], f"£{total - fee:,} (~{(Decimal(total) / fee).quantize(Decimal('0.1'))}× cost)")
+    # Google's PDF export ignores keep-with-next, so start Pricing on a fresh page to keep its table whole
+    next(p for p in d.paragraphs if p.text.strip() == "Pricing").paragraph_format.page_break_before = True
     d.save(out)
     check = docx.Document(out)
     blob = "\n".join(p.text for p in check.paragraphs) + "\n".join(
@@ -384,20 +480,38 @@ def main(argv):
         log("proposal already made:", ptext(pr.get("Proposal Doc")))
         return
     ods, pcn = ptext(pr.get("ODS Code")), ptext(pr.get("PCN"))
-    N = spec.get("list_size") or lookup_list_size(ods, P)
+    ts = ptext(pr.get("Slack TS"))
+    # Several sites or a PCN: one pricing row per practice. Registry sizes fill any the call did not state.
+    practices = []
+    for x in spec.get("practices") or []:
+        name = (x.get("name") or "").strip()
+        size = x.get("list_size") or lookup_list_size(x.get("ods") or "", name)
+        if name and size:
+            practices.append((name, int(size)))
+    # A stated list size beats the public registry (Godolphin said 9,300; the registry had 8,931)
+    N = spec.get("list_size") or (sum(s for _, s in practices) if len(practices) > 1 else 0) or lookup_list_size(ods, P)
     if not N:
         log("no list size (ODS lookup failed) - skipping")
+        if stage == "Prospect":
+            slack_note(ts, f":warning: No proposal was built for *{P}*: no list size found (ODS lookup failed and none was stated on the call). "
+                           "Run the 'Build proposal (manual)' workflow with a list size, or add the ODS code to the Notion page.")
         return
     date_iso = ptext(pr.get("Date")) or datetime.utcnow().isoformat()
     when = datetime.fromisoformat(date_iso.replace("Z", "+00:00"))
     date_label = f"{when.day} {when.strftime('%B %Y')}"
     invitees = fathom_invitees(account, ptext(pr.get("Meeting ID")), date_iso)
+    def role_for(email, given):
+        if given and not given.startswith("Practice team"):
+            return given
+        title = hubspot_title(email)
+        return f"{title}: {P}" if title else (given or f"Practice team: {P}")
     if spec.get("written_for"):
-        people = [(x.get("name", ""), x.get("role") or f"Practice team: {P}", x.get("email", "")) for x in spec["written_for"]]
+        people = [(x.get("name", ""), role_for(x.get("email", ""), x.get("role") or ""), x.get("email", "")) for x in spec["written_for"]]
     elif invitees:
-        people = [(person_name(i), f"Practice team: {P}", i.get("email", "")) for i in invitees]
+        people = [(person_name(i), role_for(i.get("email", ""), ""), i.get("email", "")) for i in invitees]
     else:
         people = [("Practice team", P, "")]
+    people = [p for p in people if p[0] and (" " in p[0].strip() or p[2])]  # drop bare first names with no email
     emails = [e for _, _, e in people if e] or [i.get("email") for i in invitees if i.get("email")]
     writer = WRITERS.get(account, WRITERS["will"])
     SHORT = spec.get("short_name") or short_of(P)
@@ -410,7 +524,9 @@ def main(argv):
         if r.returncode:
             raise RuntimeError("template download failed: " + r.stderr[-300:])
     text = build_docx(template, out, P, SHORT, int(N), pcn, spec.get("system") or "EMIS and SystmOne",
-                      spec.get("local_scheme", ""), spec.get("extra_bullets", []), people, writer, spec.get("setup_extra", ""))
+                      spec.get("local_scheme", ""), spec.get("extra_bullets", []), people, writer, spec.get("setup_extra", ""),
+                      practices=practices, pcn_agreed=bool(spec.get("pcn_discount_agreed")),
+                      agreed_terms=spec.get("agreed_terms") or [])
     log("built", out, f"({N:,} patients, {len(people)} recipients)")
     first = [p[0].split()[0] for p in people if p[0] and p[0] != "Practice team"]
     greet = ", ".join(first) if 0 < len(first) <= 4 else "all"
@@ -442,11 +558,12 @@ def main(argv):
     share(tok, pf["id"], {"type": "anyone", "role": "reader"})
     pdf_url = f"https://drive.google.com/uc?export=download&id={pf['id']}"
     log("doc", doc["webViewLink"], "| pdf", pdf_url)
-    ts = ptext(pr.get("Slack TS"))
     if ts and os.environ.get("SLACK_BOT_TOKEN") and "--no-slack" not in argv:
+        terms = ("\nAgreed on the call: " + " | ".join(spec["agreed_terms"])) if spec.get("agreed_terms") else ""
         msg = (f":page_facing_up: *Proposal - {P}* (Google Doc, anyone at Suvera can edit)\n<{doc['webViewLink']}|{name}>\n"
-               f"Standard terms: £0.75 per patient (2-year) or £0.675 (3-year), {int(N):,} patients. Edit the Doc before the "
-               "client sees it if the call agreed anything different. The Dock checklist follows in this thread once the workspace is built.")
+               f"{int(N):,} patients" + (f" across {len(practices)} practices" if len(practices) > 1 else "")
+               + f": £0.75 (2-year) / £0.68 (3-year) / PCN £0.68 and £0.60 per patient, monthly fees.{terms}\n"
+               "Check the figures against the call before the client sees it. The Dock checklist follows in this thread once the workspace is built.")
         r = http("POST", "https://slack.com/api/chat.postMessage",
                  json.dumps({"channel": CHANNEL, "thread_ts": ts, "text": msg, "unfurl_links": False}).encode(),
                  {"Authorization": "Bearer " + os.environ["SLACK_BOT_TOKEN"], "Content-Type": "application/json; charset=utf-8"})
