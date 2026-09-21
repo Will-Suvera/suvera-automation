@@ -1,0 +1,31 @@
+name: List recent Fathom meetings (read-only)
+# Diagnostic: prints today's meetings on every Fathom account so a missing
+# card can be traced without anyone holding the keys locally.
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "ISO date-time, e.g. 2026-09-21T00:00:00Z"
+        required: true
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          SINCE: ${{ github.event.inputs.since }}
+          FATHOM_WILL_KEY: ${{ secrets.FATHOM_WILL_KEY }}
+          FATHOM_CAITLIN_KEY: ${{ secrets.FATHOM_CAITLIN_KEY }}
+          FATHOM_ELLENA_KEY: ${{ secrets.FATHOM_ELLENA_KEY }}
+          FATHOM_IVAN_KEY: ${{ secrets.FATHOM_IVAN_KEY }}
+          FATHOM_CAMILLA_KEY: ${{ secrets.FATHOM_CAMILLA_KEY }}
+        run: |
+          for who in WILL CAITLIN ELLENA IVAN CAMILLA; do
+            key=$(eval echo "\$FATHOM_${who}_KEY")
+            echo "== $who"
+            [ -n "$key" ] || { echo "   (no key)"; continue; }
+            curl -sS -H "X-Api-Key: $key" "https://api.fathom.ai/external/v1/meetings?created_after=$SINCE" \
+              | python3 -c 'import json,sys
+for m in json.load(sys.stdin).get("items",[]):
+    print("  ", m.get("recording_id"), "|", (m.get("scheduled_start_time") or "")[:16], "|", m.get("title"), "|", m.get("calendar_invitees_domains_type"), "|", m.get("share_url"))'
+          done
