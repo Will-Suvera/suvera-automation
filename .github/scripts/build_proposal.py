@@ -500,6 +500,12 @@ def main(argv):
     when = datetime.fromisoformat(date_iso.replace("Z", "+00:00"))
     date_label = f"{when.day} {when.strftime('%B %Y')}"
     invitees = fathom_invitees(account, ptext(pr.get("Meeting ID")), date_iso)
+    # Claude sometimes writes agreed_terms as one string rather than a list (21 Sep 2026, Family Medical Centre)
+    agreed_terms = spec.get("agreed_terms") or []
+    if isinstance(agreed_terms, str):
+        agreed_terms = [t.strip() for t in re.split(r"(?<=[.;])\s+", agreed_terms) if t.strip()]
+    agreed_terms = [str(t) for t in agreed_terms if str(t).strip()]
+
     def role_for(email, given):
         if given and not given.startswith("Practice team"):
             return given
@@ -526,7 +532,7 @@ def main(argv):
     text = build_docx(template, out, P, SHORT, int(N), pcn, spec.get("system") or "EMIS and SystmOne",
                       spec.get("local_scheme", ""), spec.get("extra_bullets", []), people, writer, spec.get("setup_extra", ""),
                       practices=practices, pcn_agreed=bool(spec.get("pcn_discount_agreed")),
-                      agreed_terms=spec.get("agreed_terms") or [])
+                      agreed_terms=agreed_terms)
     log("built", out, f"({N:,} patients, {len(people)} recipients)")
     first = [p[0].split()[0] for p in people if p[0] and p[0] != "Practice team"]
     greet = ", ".join(first) if 0 < len(first) <= 4 else "all"
@@ -559,7 +565,7 @@ def main(argv):
     pdf_url = f"https://drive.google.com/uc?export=download&id={pf['id']}"
     log("doc", doc["webViewLink"], "| pdf", pdf_url)
     if ts and os.environ.get("SLACK_BOT_TOKEN") and "--no-slack" not in argv:
-        terms = ("\nAgreed on the call: " + " | ".join(spec["agreed_terms"])) if spec.get("agreed_terms") else ""
+        terms = ("\nAgreed on the call: " + " | ".join(agreed_terms)) if agreed_terms else ""
         msg = (f":page_facing_up: *Proposal - {P}* (Google Doc, anyone at Suvera can edit)\n<{doc['webViewLink']}|{name}>\n"
                f"{int(N):,} patients" + (f" across {len(practices)} practices" if len(practices) > 1 else "")
                + f": £0.75 (2-year) / £0.68 (3-year) / PCN £0.68 and £0.60 per patient, monthly fees.{terms}\n"
