@@ -25,7 +25,5 @@ jobs:
             echo "== $who"
             [ -n "$key" ] || { echo "   (no key)"; continue; }
             curl -sS -H "X-Api-Key: $key" "https://api.fathom.ai/external/v1/meetings?created_after=$SINCE" \
-              | python3 -c 'import json,sys
-for m in json.load(sys.stdin).get("items",[]):
-    print("  ", m.get("recording_id"), "|", (m.get("scheduled_start_time") or "")[:16], "|", m.get("title"), "|", m.get("calendar_invitees_domains_type"), "|", m.get("share_url"))'
+              | jq -r '.items[] | "   \(.recording_id) | \(.scheduled_start_time[0:16]) | \(.title) | \(.calendar_invitees_domains_type) | \(.share_url)"'
           done
